@@ -1,0 +1,16 @@
+# ReAct Generator config (Phase 1)
+
+model:
+  name: "Qwen/Qwen2.5-32B-Instruct"
+  backend: "vllm"           # served separately from Student training GPUs
+  temperature: 0.7
+  max_tokens: 4096
+
+react:
+  observe_window: 50        # last N Student training steps fed to [Observe]
+  failure_samples_per_tag: 3
+  tasks_per_round: 32
+
+memory:
+  profile_refresh_every: 4  # rebuild student_profile every K rounds
+  exemplar_pool_size: 16    # Phase 2 (prompt self-optimization)

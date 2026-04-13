@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env
+.venv/
+venv/
+env/
+.env
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Training artifacts
+wandb/
+outputs/
+checkpoints/
+logs/
+*.log
+runs/
+
+# Data
+data/
+*.parquet
+*.jsonl

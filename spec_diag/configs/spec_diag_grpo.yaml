@@ -1,0 +1,22 @@
+# spec_diag GRPO config — composed on top of verl's stock PPO trainer config.
+#
+# Phase 0 stub. Exact data.* wiring TBD once DynamicDataset is implemented.
+# At Phase 0 we just want to inherit verl defaults and flip on GRPO.
+
+defaults:
+  - ppo_trainer         # verl/verl/trainer/config/ppo_trainer.yaml
+  - _self_
+
+algorithm:
+  adv_estimator: grpo
+
+actor_rollout_ref:
+  actor:
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+  rollout:
+    n: 8                # GRPO group size
+
+# TODO(Phase 0): replace data.* to pull from DynamicDataset Ray Actor
+data:
+  train_batch_size: 32

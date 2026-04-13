@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spec_diag"
+version = "0.0.1"
+description = "Dynamic curriculum framework: ReAct-Generator + GRPO-Student, built on verl"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # verl is expected to be installed separately (editable) from ../verl
+    # Core deps needed by our own modules:
+    "ray",
+    "pebble",
+    "timeout_decorator",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-xdist",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["spec_diag*"]
