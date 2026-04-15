@@ -53,8 +53,11 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.85}"
 SERVED_NAME="${SERVED_NAME:-generator}"
 
 TS="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$LOG_DIR/vllm_1xa800_${TS}.log"
-PID_FILE="$LOG_DIR/vllm_1xa800.pid"
+# Callers (e.g. the 3xa800 orchestrator) can point the log at a run-dir
+# file via `VLLM_LOG_FILE=...`. Same for the pid file.
+LOG_FILE="${VLLM_LOG_FILE:-$LOG_DIR/vllm_1xa800_${TS}.log}"
+PID_FILE="${VLLM_PID_FILE:-$LOG_DIR/vllm_1xa800.pid}"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$PID_FILE")"
 
 echo "==== vLLM 1x A800 ===="
 echo "host      : $(hostname)"

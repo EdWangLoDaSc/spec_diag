@@ -27,8 +27,10 @@ accepts is accepted here too.
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,62 @@ from omegaconf import OmegaConf
 
 
 _CONFIG_DIR = str(Path(__file__).parent / "configs")
+
+
+# --------------------------------------------------------------------- logging
+
+
+def _configure_logging(run_dir: Path | None) -> None:
+    """Wire up root logging so every `logging.getLogger(...)` call inside
+    spec_diag (trainer, feeder, reward manager, …) actually produces output.
+
+    Two handlers:
+      - stderr (captured by the orchestrator's `tee train.log`)
+      - file handler at `$run_dir/train_python.log` if the orchestrator
+        provided a run dir via `SPEC_DIAG_RUN_DIR`.
+
+    We deliberately do NOT touch verl's loggers — they configure themselves
+    and we don't want to double-print. We set propagate=False on ours and
+    leave the verl logger tree alone.
+    """
+    fmt = "%(asctime)s %(levelname).1s %(name)s: %(message)s"
+    datefmt = "%H:%M:%S"
+    formatter = logging.Formatter(fmt, datefmt=datefmt)
+
+    root = logging.getLogger()
+    # Clear pre-existing handlers (Hydra installs its own) so we start clean.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.setLevel(logging.INFO)
+
+    stderr_handler = logging.StreamHandler(stream=sys.stderr)
+    stderr_handler.setFormatter(formatter)
+    root.addHandler(stderr_handler)
+
+    if run_dir is not None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(
+            run_dir / "train_python.log", mode="a", encoding="utf-8"
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
+    # Keep the spec_diag subtree at INFO, noisy libs at WARNING.
+    logging.getLogger("spec_diag").setLevel(logging.INFO)
+    for noisy in ("urllib3", "httpx", "httpcore", "openai", "filelock"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def _dump_resolved_config(config, run_dir: Path | None) -> None:
+    if run_dir is None:
+        return
+    run_dir.mkdir(parents=True, exist_ok=True)
+    out = run_dir / "config_resolved.yaml"
+    try:
+        text = OmegaConf.to_yaml(config, resolve=True)
+    except Exception as e:  # noqa: BLE001
+        text = f"# OmegaConf.to_yaml(resolve=True) failed: {e}\n"
+    out.write_text(text, encoding="utf-8")
 
 
 def _load_generator_config() -> dict[str, Any]:
@@ -69,8 +127,6 @@ def _build_spec_diag_task_runner_cls():
         """
 
         def run(self, config):
-            from pprint import pprint
-
             from verl.utils import hf_processor, hf_tokenizer
             from verl.utils.fs import copy_to_local
 
@@ -78,11 +134,18 @@ def _build_spec_diag_task_runner_cls():
             from spec_diag.generator.react_generator import ReActGenerator
             from spec_diag.trainer.dynamic_grpo_trainer import DynamicGRPOTrainer
 
-            print(
-                f"[spec_diag] SpecDiagTaskRunner host={socket.gethostname()} "
-                f"pid={os.getpid()}"
+            # We are in a fresh Ray actor process — the driver's logging
+            # config didn't propagate. Re-run it so trainer / feeder logs
+            # flow into $SPEC_DIAG_RUN_DIR/train_python.log.
+            run_dir_env = os.environ.get("SPEC_DIAG_RUN_DIR")
+            actor_run_dir = Path(run_dir_env) if run_dir_env else None
+            _configure_logging(actor_run_dir)
+
+            actor_log = logging.getLogger("spec_diag.train.runner")
+            actor_log.info(
+                "SpecDiagTaskRunner starting host=%s pid=%d run_dir=%s",
+                socket.gethostname(), os.getpid(), actor_run_dir,
             )
-            pprint(OmegaConf.to_container(config, resolve=True))
             OmegaConf.resolve(config)
 
             # ---- worker / resource-pool bootstrap (verl parent helpers) ----
@@ -136,10 +199,9 @@ def _build_spec_diag_task_runner_cls():
                     or 10_000
                 ),
             )
-            print(
-                f"[spec_diag] DynamicDataset actor spawned "
-                f"(max_size={ray.get(dataset_actor.stats.remote()).get('size', 0)} "
-                f"tasks initially)"
+            actor_log.info(
+                "DynamicDataset actor spawned; stats=%s",
+                ray.get(dataset_actor.stats.remote()),
             )
 
             # ---- construct DynamicGRPOTrainer ----
@@ -158,15 +220,22 @@ def _build_spec_diag_task_runner_cls():
             # constructs the inner RayPPOTrainer. Then init_workers spins up
             # the actor / ref / rollout worker groups, and fit() starts the
             # PPO loop.
+            actor_log.info("trainer.build()")
             trainer.build()
+            actor_log.info("trainer.init_workers()")
             trainer.init_workers()
+            actor_log.info("trainer.fit() — entering verl loop")
             try:
                 trainer.fit()
+            except Exception:
+                actor_log.exception("trainer.fit() raised")
+                raise
             finally:
+                actor_log.info("trainer.fit() exited; closing generator")
                 try:
                     generator.close()
                 except Exception:  # noqa: BLE001
-                    pass
+                    actor_log.exception("generator.close() raised")
 
     return SpecDiagTaskRunner
 
@@ -183,6 +252,7 @@ _SPEC_DIAG_ENV_PASSTHROUGH = (
     "OPENAI_API_KEY",
     "SPEC_DIAG_MODEL",
     "SPEC_DIAG_N",
+    "SPEC_DIAG_RUN_DIR",
     "HF_HOME",
 )
 
@@ -191,6 +261,17 @@ _SPEC_DIAG_ENV_PASSTHROUGH = (
 def main(config) -> None:
     from verl.trainer.constants_ppo import get_ppo_ray_runtime_env
     from verl.utils.device import auto_set_device
+
+    run_dir_env = os.environ.get("SPEC_DIAG_RUN_DIR")
+    run_dir = Path(run_dir_env) if run_dir_env else None
+    _configure_logging(run_dir)
+    _dump_resolved_config(config, run_dir)
+
+    driver_log = logging.getLogger("spec_diag.train")
+    driver_log.info(
+        "main() host=%s pid=%d run_dir=%s",
+        socket.gethostname(), os.getpid(), run_dir,
+    )
 
     auto_set_device(config)
 
