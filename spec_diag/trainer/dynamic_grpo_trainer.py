@@ -407,10 +407,27 @@ class DynamicGRPOTrainer:
         )
         return self._inner
 
+    def init_workers(self) -> None:
+        """Bring up the Ray worker groups (actor / ref / rollout / critic).
+
+        Mirrors verl's own `main_ppo` pattern: `trainer.init_workers()` must
+        happen between constructing `RayPPOTrainer` and calling `fit()`.
+        """
+        if self._inner is None:
+            self.build()
+        assert self._inner is not None
+        self._inner.init_workers()
+
     def fit(self) -> None:
         if self._inner is None:
             self.build()
         assert self._inner is not None
+        # Idempotent-ish: if the caller already called init_workers, verl's
+        # RayPPOTrainer tolerates it being called twice in practice because
+        # the method is usually guarded, but we still prefer the explicit
+        # `init_workers() → fit()` order from verl's main_ppo. Callers that
+        # have already initialized workers can skip this and call fit()
+        # directly on `self._inner`.
         try:
             self._inner.fit()
         finally:
