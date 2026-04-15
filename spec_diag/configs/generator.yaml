@@ -1,7 +1,10 @@
 # ReAct Generator config (Phase 1)
+# 出题 model: Qwen3-8B. 比 student (Qwen2.5-7B / GRPO) 稍大一档。
+# bf16 权重 ~16GB,单张 H100 80GB 绰绰有余;2/4 卡配置只是为了更长 KV cache + 吞吐.
+# Qwen3 默认带 thinking mode,prompt 里可加 /no_think 关掉,或靠 chat_template 控制.
 
 model:
-  name: "Qwen/Qwen2.5-32B-Instruct"
+  name: "Qwen/Qwen3-8B"
   backend: "vllm"           # served separately from Student training GPUs
   temperature: 0.7
   max_tokens: 4096

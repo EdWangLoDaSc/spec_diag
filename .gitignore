@@ -22,6 +22,9 @@ env/
 *.swp
 .DS_Store
 
+# Slurm
+slurm_logs/
+
 # Training artifacts
 wandb/
 outputs/

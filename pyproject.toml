@@ -15,6 +15,13 @@ dependencies = [
     "pebble",
     "timeout_decorator",
     "pyyaml",
+    # python_executor (copied from AZR) needs:
+    "numpy",
+    "regex",
+    "python-dateutil",
+    "tqdm",
+    # ReAct generator talks to vLLM over the OpenAI-compatible API:
+    "openai>=1.0",
 ]
 
 [project.optional-dependencies]

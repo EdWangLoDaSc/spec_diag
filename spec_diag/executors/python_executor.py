@@ -52,8 +52,7 @@ class GenericRuntime:
 
     def exec_code(self, code_piece: str) -> None:
         if regex.search(r'(\s|^)?input\(', code_piece):
-            # regex.search(r'(\s|^)?os.', code_piece):
-            raise RuntimeError()
+            raise RuntimeError("input() is not allowed in executor sandbox")
         exec(code_piece, self._global_vars)
 
         # TODO: use: https://github.com/shroominic/codebox-api
@@ -188,8 +187,9 @@ class PythonExecutor:
                 if retry == max_retries - 1:
                     error_details = traceback.format_exc()
                     print(f"Error in eval_input_prediction: {e}\n{error_details}")
-                    return
+                    return 0.0
                 time.sleep(0.1 * (retry + 1))  # Exponential backoff
+        return 0.0
 
     def eval_output_prediction(self, code: str, gold_output: str, agent_output: str, imports: List[str] = []) -> float:
         try: # fast check if we dont need to run the code
@@ -216,8 +216,9 @@ class PythonExecutor:
                 if retry == max_retries - 1:
                     error_details = traceback.format_exc()
                     print(f"Error in eval_output_prediction: {e}\n{error_details}")
-                    return
+                    return 0.0
                 time.sleep(0.1 * (retry + 1))  # Exponential backoff
+        return 0.0
 
     def eval_k_input_prediction(self, code: str, gold_output: str, k_agent_inputs: List[str], imports: List[str] = []) -> List[float]:
         if isinstance(imports, np.ndarray):
@@ -233,9 +234,14 @@ class PythonExecutor:
             except:
                 invalid_lists.append(0.0)
         acc_list, status = self.apply(EVAL_K_INPUT_PREDICTION_TEMPLATE(code=code, gold_output=gold_output, k_agent_inputs=valid_k_agent_inputs))
-        assert 'error' not in status.lower()
-        output_acc = eval(acc_list) + invalid_lists
-        assert len(output_acc) == len(k_agent_inputs)
+        if 'error' in status.lower():
+            return [0.0] * len(k_agent_inputs)
+        try:
+            output_acc = eval(acc_list) + invalid_lists
+        except Exception:
+            return [0.0] * len(k_agent_inputs)
+        if len(output_acc) != len(k_agent_inputs):
+            return [0.0] * len(k_agent_inputs)
         return output_acc
 
     def eval_k_output_prediction(self, code: str, gold_output: str, k_agent_outputs: List[str], imports: List[str] = []) -> List[float]:
@@ -255,9 +261,14 @@ class PythonExecutor:
             except:
                 invalid_lists.append(0.0)
         acc_list, status = self.apply(EVAL_K_OUTPUT_PREDICTION_TEMPLATE(code=code, gold_output=gold_output, k_agent_outputs=valid_k_agent_outputs))
-        assert 'error' not in status.lower()
-        output_acc = eval(acc_list) + invalid_lists
-        assert len(output_acc) == len(k_agent_outputs)
+        if 'error' in status.lower():
+            return [0.0] * len(k_agent_outputs)
+        try:
+            output_acc = eval(acc_list) + invalid_lists
+        except Exception:
+            return [0.0] * len(k_agent_outputs)
+        if len(output_acc) != len(k_agent_outputs):
+            return [0.0] * len(k_agent_outputs)
         return output_acc
 
     def check_all(
