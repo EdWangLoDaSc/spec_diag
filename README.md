@@ -98,13 +98,16 @@ pip install -e '.[dev]'
 # 4. Install vLLM (required — serves the generator)
 pip install 'vllm>=0.8.4'      # Qwen3 needs ≥ 0.8.4
 
+# 二期交互式申请 2 张 A800（推荐先测试）
+srun -p acd_u --gres=gpu:2 -n 16 --mem=64G --time=02:00:00 --pty bash -i
+
 # 5. Sanity check
 python -c "import verl, spec_diag, vllm; print(verl.__version__ if hasattr(verl,'__version__') else verl.__file__); print(vllm.__version__)"
 ```
 
 If your verl checkout lives elsewhere, export `VERL_DIR`:
 ```bash
-export VERL_DIR=/path/to/verl
+export VERL_DIR=./verl
 ```
 
 ### HPC3-specific
