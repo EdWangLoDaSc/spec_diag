@@ -28,7 +28,7 @@ set -euo pipefail
 
 # ---- paths ----
 SPEC_DIAG_ROOT="${SPEC_DIAG_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-VERL_DIR="${VERL_DIR:-$SPEC_DIAG_ROOT/../verl}"
+VERL_DIR="${VERL_DIR:-$SPEC_DIAG_ROOT/verl}"
 DATA_DIR="${DATA_DIR:-$HOME/data/gsm8k}"
 LOG_DIR="${LOG_DIR:-$SPEC_DIAG_ROOT/logs/verl_sanity}"
 mkdir -p "$LOG_DIR" "$DATA_DIR"

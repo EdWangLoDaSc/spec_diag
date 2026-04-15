@@ -9,7 +9,7 @@ description = "Dynamic curriculum framework: ReAct-Generator + GRPO-Student, bui
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    # verl is expected to be installed separately (editable) from ../verl
+    # verl is vendored as a subdirectory at ./verl and installed editable separately.
     # Core deps needed by our own modules:
     "ray",
     "pebble",
@@ -33,3 +33,4 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["spec_diag*"]
+exclude = ["verl*", "tests*"]

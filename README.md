@@ -69,7 +69,8 @@ spec_diag/
 └── tests/
 ```
 
-`verl` is **not vendored**. Clone it side-by-side.
+`verl` is vendored as a subdirectory at `./verl` (kept as a separate
+checkout so it can be updated independently from upstream).
 
 Pinned verl commit for reproducibility:
 ```
@@ -81,10 +82,10 @@ Pinned verl commit for reproducibility:
 ## Server setup
 
 ```bash
-# 1. Clone side-by-side
+# 1. Clone (verl is already nested inside)
 git clone https://github.com/EdWangLoDaSc/spec_diag.git
-git clone https://github.com/verl-project/verl.git
-cd verl && git checkout 114ad569f73882b927c21f637d000117703066a3 && cd ..
+cd spec_diag
+(cd verl && git checkout 114ad569f73882b927c21f637d000117703066a3)
 
 # 2. Env
 conda create -n spec_diag python=3.10 -y
@@ -92,7 +93,7 @@ conda activate spec_diag
 
 # 3. Install verl + spec_diag (editable)
 pip install -e ./verl
-pip install -e './spec_diag[dev]'
+pip install -e '.[dev]'
 
 # 4. Install vLLM (required — serves the generator)
 pip install 'vllm>=0.8.4'      # Qwen3 needs ≥ 0.8.4
@@ -101,7 +102,7 @@ pip install 'vllm>=0.8.4'      # Qwen3 needs ≥ 0.8.4
 python -c "import verl, spec_diag, vllm; print(verl.__version__ if hasattr(verl,'__version__') else verl.__file__); print(vllm.__version__)"
 ```
 
-If your verl clone is not at `../verl`, export `VERL_DIR`:
+If your verl checkout lives elsewhere, export `VERL_DIR`:
 ```bash
 export VERL_DIR=/path/to/verl
 ```

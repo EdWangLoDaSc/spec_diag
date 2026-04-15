@@ -109,7 +109,7 @@ nvidia-smi || echo "nvidia-smi not available yet"
 
 HANYANG_BASE="/data/user/dingcao/hanyang"
 SPEC_DIAG_ROOT="$HANYANG_BASE/spec_diag"
-VERL_DIR="$HANYANG_BASE/verl"
+VERL_DIR="$SPEC_DIAG_ROOT/verl"
 export VERL_DIR
 
 mkdir -p "$SPEC_DIAG_ROOT/slurm_logs"

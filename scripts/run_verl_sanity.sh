@@ -4,11 +4,11 @@
 # Does NOT use spec_diag code. This is a pure verl baseline to confirm the
 # install + GPU env work before we start writing experiment code.
 #
-# Resolves verl via $VERL_DIR, falling back to sibling ../verl.
+# Resolves verl via $VERL_DIR, falling back to nested ./verl.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VERL_DIR="${VERL_DIR:-$(cd "$SCRIPT_DIR/../../verl" 2>/dev/null && pwd || echo "")}"
+VERL_DIR="${VERL_DIR:-$(cd "$SCRIPT_DIR/../verl" 2>/dev/null && pwd || echo "")}"
 
 if [ -z "$VERL_DIR" ] || [ ! -d "$VERL_DIR" ]; then
   echo "ERROR: verl directory not found."
