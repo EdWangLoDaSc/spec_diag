@@ -1,7 +1,14 @@
 # spec_diag GRPO config — composed on top of verl's stock PPO trainer config.
 #
-# Phase 0 stub. Exact data.* wiring TBD once DynamicDataset is implemented.
-# At Phase 0 we just want to inherit verl defaults and flip on GRPO.
+# This inherits verl/verl/trainer/config/ppo_trainer.yaml and overrides the
+# bits spec_diag needs. Model / tokenizer paths are left as TODO placeholders
+# that a launcher script must fill in before running.
+#
+# Data flow note: we pass `train_dataset` to RayPPOTrainer explicitly from
+# DynamicGRPOTrainer.build(), so `data.train_files` / `data.val_files` are
+# not actually loaded — but verl still reads a few `data.*` fields
+# (prompt_key, max_prompt_length, dataloader_num_workers, truncation, ...)
+# during sampler / collate setup, so we have to set them sensibly.
 
 defaults:
   - ppo_trainer         # verl/verl/trainer/config/ppo_trainer.yaml
@@ -15,8 +22,102 @@ actor_rollout_ref:
     use_kl_loss: true
     kl_loss_coef: 0.001
   rollout:
-    n: 8                # GRPO group size
+    # GRPO group size — how many rollouts per prompt.
+    n: 8
+  model:
+    # TODO(user): point this at your policy checkpoint (HF hub id or local path).
+    # Same model is used for actor / rollout / ref (hybrid engine).
+    path: "Qwen/Qwen2.5-1.5B-Instruct"
 
-# TODO(Phase 0): replace data.* to pull from DynamicDataset Ray Actor
 data:
+  # We feed the trainer via a custom map-style Dataset (DynamicMapDataset);
+  # train_files/val_files are kept as placeholders because verl's config
+  # schema requires strings, but they are never read.
+  train_files: "<unused — DynamicGRPOTrainer passes train_dataset directly>"
+  val_files: "<unused — DynamicGRPOTrainer passes val_dataset directly>"
+
+  # Matches the "prompt" field in _task_to_sample.
+  prompt_key: prompt
+
+  # IMPORTANT: must be 0. Ray actor handles do not survive being forked into
+  # DataLoader worker processes, and DynamicMapDataset + the feeder thread
+  # rely on sharing a single in-process buffer view.
+  dataloader_num_workers: 0
+
+  # Prompt / response length — tune for your model. These defaults are
+  # generous for small code-reasoning tasks.
+  max_prompt_length: 1024
+  max_response_length: 512
+
+  # Training batch size (number of prompts pulled from DynamicMapDataset
+  # per training step). Must divide evenly into n_gpus * dp size.
   train_batch_size: 32
+
+  # Validation is disabled at the trainer level (see trainer.val_before_train
+  # below), but verl still asserts len(val_dataloader) >= 1. We pass the same
+  # DynamicMapDataset as val in DynamicGRPOTrainer.build() and set
+  # val_batch_size=1 so the dummy val iteration is cheap if it ever runs.
+  val_batch_size: 1
+
+  # No cached rl_dataset caching needed — we don't use the parquet path.
+  shuffle: false
+
+  # Return chat messages unmodified; rollout's AgentLoop will apply the
+  # template. _task_to_sample already produces a list of chat messages.
+  return_raw_chat: true
+
+  # Fail loudly on overlength prompts rather than silently truncating
+  # (Phase 0 tasks should be small; if we hit this it's a bug).
+  truncation: error
+
+trainer:
+  project_name: spec_diag
+  experiment_name: phase0_grpo
+  # Keep validation off until we have a real eval set. DynamicMapDataset is
+  # tuned for training-only data flow.
+  val_before_train: false
+  test_freq: -1
+  # Small default — launcher scripts should override.
+  # Actual step count = samples_per_epoch / train_batch_size * total_epochs
+  # = 1024 / 32 * 4 = 128 steps.
+  total_epochs: 4
+  save_freq: 50
+  logger: ["console"]
+
+# ---- spec_diag-specific config block, consumed by DynamicGRPOTrainer ----
+spec_diag:
+  # len() of DynamicMapDataset per epoch. This sets how many training steps
+  # per epoch = samples_per_epoch / data.train_batch_size.
+  samples_per_epoch: 1024
+
+  # Sampling strategy for DynamicDataset.sample_batch(): "uniform" |
+  # "recency_weighted" | "mixed" (half uniform, half recency-weighted).
+  sample_strategy: mixed
+
+  feeder:
+    # Tasks per generator.cold_start() call. Bigger = fewer vLLM round trips
+    # but more latency per trip. Should be a few × data.train_batch_size so
+    # one generate() call keeps the trainer fed for several steps.
+    feed_batch: 64
+
+    # Trigger cold_start whenever the buffer drops below this size.
+    # Rule of thumb: >= feed_batch AND >= a few × train_batch_size to absorb
+    # generator latency without starving the dataloader.
+    low_watermark: 128
+
+    # Seconds between feeder buffer-size checks. Should be << the typical
+    # training step time so the feeder can react before the buffer drains.
+    poll_interval_s: 5.0
+
+    # Synchronous cold_start done BEFORE RayPPOTrainer is constructed, so
+    # step 0 doesn't block on an empty buffer. Should be >= low_watermark.
+    warmup_tasks: 256
+
+    # Max seconds DynamicMapDataset.__getitem__ will block on an empty
+    # buffer before raising. Safety net against a dead feeder.
+    getitem_max_wait_s: 300.0
+
+    # Dataset retry cadence while blocked on empty buffer. Independent of
+    # the feeder's own poll interval — should be small (sub-second) so the
+    # trainer unblocks promptly once the feeder lands a fresh batch.
+    getitem_poll_interval_s: 0.5

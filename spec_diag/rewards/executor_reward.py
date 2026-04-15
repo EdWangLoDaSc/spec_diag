@@ -14,8 +14,11 @@ Register as `"spec_diag_executor"` so verl configs can pick it up via
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from spec_diag.executors.base import Executor
 
@@ -119,9 +122,23 @@ else:
                 task = item.non_tensor_batch.get("spec_diag_task")
                 if not isinstance(task, dict):
                     # Fallback: try the verl-native ground_truth schema.
+                    logger.warning(
+                        "ExecutorRewardManager: sample %d missing "
+                        "'spec_diag_task' in non_tensor_batch; falling back "
+                        "to reward_model.ground_truth. If this happens every "
+                        "step verl's collate may be dropping the field.",
+                        i,
+                    )
                     rm = item.non_tensor_batch.get("reward_model") or {}
                     task = rm.get("ground_truth") if isinstance(rm, dict) else None
                 if not isinstance(task, dict):
+                    logger.error(
+                        "ExecutorRewardManager: sample %d has no task "
+                        "(neither spec_diag_task nor reward_model.ground_truth"
+                        "); scoring 0.0. This will silently break training "
+                        "signal — investigate dataset schema.",
+                        i,
+                    )
                     reward = 0.0
                 else:
                     reward = self.score_one(task, response_str)
