@@ -233,6 +233,8 @@ def _build_spec_diag_task_runner_cls():
                     "max_tokens": int(model_cfg.get("max_tokens", 4096)),
                     "validity_timeout": 5,
                     "validity_workers": 2,
+                    "seed_data_path": model_cfg.get("seed_data_path"),
+                    "n_references": int(model_cfg.get("n_references", 6)),
                 },
             )
 

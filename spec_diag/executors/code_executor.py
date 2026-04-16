@@ -42,8 +42,16 @@ class CodeExecutor(Executor):
             ast_check=ast_check,
         )
 
+    # Default banned keywords (same as AZR)
+    BANNED_KEYWORDS = [
+        "logging", "random", "multiprocessing", "pebble", "subprocess",
+        "threading", "datetime", "time", "hashlib", "hmac", "bcrypt",
+        "os.sys", "os.path", "sys.exit", "os.environ", "calendar",
+    ]
+
     def check_validity(self, task: dict[str, Any]) -> bool:
-        """Task is valid iff code parses, runs on inputs, and is deterministic."""
+        """Task is valid iff code parses, runs on inputs, is deterministic,
+        and contains no banned keywords."""
         code = task.get("code")
         inputs = task.get("inputs")
         if not isinstance(code, str) or not isinstance(inputs, str):
@@ -53,6 +61,7 @@ class CodeExecutor(Executor):
             code=code,
             inputs=inputs,
             imports=imports,
+            banned_keywords=self.BANNED_KEYWORDS,
             check_determinism=True,
             check_error=False,
         )

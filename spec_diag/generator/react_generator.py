@@ -16,8 +16,11 @@ name is whatever vLLM's `--served-model-name` says (default `"generator"`).
 from __future__ import annotations
 
 import json
+import logging
 import os
+import random
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from spec_diag.executors.code_executor import CodeExecutor
@@ -25,30 +28,74 @@ from spec_diag.executors.code_executor import CodeExecutor
 if TYPE_CHECKING:
     from spec_diag.generator.memory import GeneratorMemory
 
+logger = logging.getLogger(__name__)
 
-_COLD_START_SYSTEM = (
-    "You design Python code reasoning tasks. Every task defines a pure "
-    "deterministic function `def f(...)` and a concrete input. The student "
-    "will be asked to predict `repr(f(input))`. Follow these rules:\n"
-    "1. `f` must be a pure function of its arguments (no randomness, no IO, "
-    "no network, no filesystem, no time).\n"
-    "2. `f` must terminate in well under one second on the given input.\n"
-    "3. The input must be a valid Python literal passable as positional args.\n"
-    "4. Prefer simple algorithmic problems (string, list, arithmetic, dict).\n"
-    "5. Output STRICT JSON only. No prose, no markdown fences."
-)
+# ---------------------------------------------------------------------------
+# Banned keywords — checked via AST in CodeExecutor.check_validity
+# ---------------------------------------------------------------------------
 
-_COLD_START_USER_TEMPLATE = (
-    "Produce {n} distinct tasks as a JSON list. Each element must be an "
-    "object with keys:\n"
-    '  "code": string. Python source defining `def f(...): ...`. Can include '
-    "helper defs and imports at the top.\n"
-    '  "inputs": string. Python literal passed as positional args to f, e.g. '
-    '"1, 2" or "[3, 1, 2]".\n'
-    '  "capability_tags": list[string]. 1-3 short tags like '
-    '"sort", "string", "arithmetic".\n'
-    "Return ONLY the JSON list."
-)
+BANNED_KEYWORDS = [
+    "logging", "random", "multiprocessing", "pebble", "subprocess",
+    "threading", "datetime", "time", "hashlib", "hmac", "bcrypt",
+    "os.sys", "os.path", "sys.exit", "os.environ", "calendar",
+]
+
+# ---------------------------------------------------------------------------
+# Prompt templates — cold-start (Phase 0) and ReAct (Phase 1)
+# ---------------------------------------------------------------------------
+
+_COLD_START_SYSTEM = """\
+You design Python code reasoning tasks. Every task defines a pure \
+deterministic function `def f(...)` and a concrete input. The student \
+will be asked to predict `repr(f(input))`.
+
+### Code Requirements:
+- Name the entry function `f` (e.g., `def f(...): ...`); nested defs inside `f` are allowed
+- Ensure the function returns a value
+- Include at least one input parameter
+- Make the function deterministic
+- Make the snippet require state tracking across multiple data \
+transformations, ensuring the task requires long multi-step reasoning
+- AVOID THE FOLLOWING:
+  * Random functions or variables
+  * Date/time operations
+  * I/O operations (reading files, network requests)
+  * Printing or logging
+  * Any external state
+  * These banned keywords: {banned_keywords}
+- Ensure execution completes within 10 seconds on a modern CPU
+- All imports and class definitions should be at the very top
+
+### Difficulty Guidelines:
+Focus on algorithmic reasoning or logic complexity. Examples:
+- Complex data structures: trees, heaps, stacks, queues, graphs
+- Algorithms: dynamic programming, recursion, divide and conquer, \
+greedy, backtracking, BFS/DFS
+- Multi-step state transformations, nested loops with non-trivial logic
+- String/list manipulations requiring careful index tracking
+
+### Input Requirements:
+- Provide exactly one test input for your function
+- Format multiple arguments with commas between them
+- Remember to add quotes around string arguments
+
+Output STRICT JSON only. No prose, no markdown fences.\
+"""
+
+_COLD_START_USER_TEMPLATE = """\
+{reference_section}\
+Produce {n} distinct tasks as a JSON list. Each element must be an \
+object with keys:
+  "code": string. Python source defining `def f(...): ...`. Can include \
+helper defs and imports at the top.
+  "inputs": string. Python literal passed as positional args to f, e.g. \
+"1, 2" or "[3, 1, 2]".
+  "capability_tags": list[string]. 1-3 short tags describing the \
+algorithmic capability tested, e.g. "recursion", "graph", "dp", \
+"string", "tree", "backtracking", "greedy", "stack", "arithmetic".
+
+Return ONLY the JSON list.\
+"""
 
 
 class ReActGenerator:
@@ -63,6 +110,8 @@ class ReActGenerator:
             ast_check=True,
         )
         self._client = None  # lazy
+        self._seed_snippets: list[dict[str, Any]] | None = None
+        self._n_references = int(self.config.get("n_references", 6))
 
     # ---- OpenAI client ----
 
@@ -94,15 +143,71 @@ class ReActGenerator:
         )
         return resp.choices[0].message.content or ""
 
-    # ---- Task generation ----
+    # ---- Seed / reference snippets ----
 
-    def cold_start(self, n: int) -> list[dict[str, Any]]:
-        """Generate `n` seed tasks with gold outputs computed locally."""
-        raw = self._chat(
-            system=_COLD_START_SYSTEM,
-            user=_COLD_START_USER_TEMPLATE.format(n=n),
+    def _load_seeds(self) -> list[dict[str, Any]]:
+        """Load seed snippets from JSONL file (lazy, cached)."""
+        if self._seed_snippets is not None:
+            return self._seed_snippets
+
+        seed_path = self.config.get("seed_data_path")
+        if not seed_path:
+            self._seed_snippets = []
+            return self._seed_snippets
+
+        p = Path(seed_path)
+        if not p.exists():
+            logger.warning("seed_data_path %s not found; no references", p)
+            self._seed_snippets = []
+            return self._seed_snippets
+
+        snippets = []
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if "snippet" in entry and "input" in entry and "output" in entry:
+                        snippets.append(entry)
+                except json.JSONDecodeError:
+                    continue
+        logger.info("loaded %d seed snippets from %s", len(snippets), p)
+        self._seed_snippets = snippets
+        return self._seed_snippets
+
+    def _sample_references(self, n: int | None = None) -> str:
+        """Sample reference snippets and format them for prompt injection."""
+        seeds = self._load_seeds()
+        if not seeds:
+            return ""
+
+        k = min(n or self._n_references, len(seeds))
+        chosen = random.sample(seeds, k)
+
+        parts = ["\n### Reference Code Snippets (for style and difficulty guidance):\n"]
+        for i, snip in enumerate(chosen):
+            parts.append(
+                f"<snippet_{i}>\n"
+                f"```python\n{snip['snippet']}\n```\n"
+                f"```input\n{snip['input']}\n```\n"
+                f"```output\n{snip['output']}\n```\n"
+                f"</snippet_{i}>\n"
+            )
+        parts.append(
+            "Design tasks at a similar or higher difficulty level than "
+            "these references. Your tasks must be sufficiently different "
+            "from the provided snippets.\n\n"
         )
-        specs = _parse_json_list(raw)
+        return "".join(parts)
+
+    # ---- Validation helper ----
+
+    def _validate_specs(
+        self, specs: list[Any], n: int,
+    ) -> list[dict[str, Any]]:
+        """Validate raw LLM specs → filter + compute gold_output."""
         tasks: list[dict[str, Any]] = []
         for spec in specs:
             if not isinstance(spec, dict):
@@ -129,6 +234,21 @@ class ReActGenerator:
                 break
         return tasks
 
+    # ---- Task generation ----
+
+    def cold_start(self, n: int) -> list[dict[str, Any]]:
+        """Generate `n` seed tasks with gold outputs computed locally."""
+        system = _COLD_START_SYSTEM.format(
+            banned_keywords=", ".join(BANNED_KEYWORDS),
+        )
+        user = _COLD_START_USER_TEMPLATE.format(
+            n=n,
+            reference_section=self._sample_references(),
+        )
+        raw = self._chat(system=system, user=user)
+        specs = _parse_json_list(raw)
+        return self._validate_specs(specs, n)
+
     def generate(self, memory: "GeneratorMemory", n: int) -> list[dict[str, Any]]:
         """Phase 1: generate tasks conditioned on Student performance memory."""
         from spec_diag.generator.prompts import REACT_SYSTEM, REACT_USER_TEMPLATE
@@ -145,49 +265,27 @@ class ReActGenerator:
         weak_tags = ", ".join(ctx.get("weak_tags", [])) or "(none identified)"
         strong_tags = ", ".join(ctx.get("strong_tags", [])) or "(none identified)"
 
-        system = REACT_SYSTEM.format(n=n)
+        system = REACT_SYSTEM.format(
+            n=n,
+            banned_keywords=", ".join(BANNED_KEYWORDS),
+        )
         user = REACT_USER_TEMPLATE.format(
             student_profile=ctx.get("student_profile") or "(no profile yet)",
             capability_summary=cap_text,
             weak_tags=weak_tags,
             strong_tags=strong_tags,
             failure_examples=ctx.get("recent_failures", "(none)"),
+            reference_section=self._sample_references(),
             n=n,
         )
 
         raw = self._chat(system=system, user=user)
         specs = _parse_json_list(raw)
-
-        # Validate + compute gold_output (same logic as cold_start)
-        tasks: list[dict[str, Any]] = []
-        for spec in specs:
-            if not isinstance(spec, dict):
-                continue
-            code = spec.get("code")
-            inputs = spec.get("inputs")
-            if not isinstance(code, str) or not isinstance(inputs, str):
-                continue
-            draft: dict[str, Any] = {
-                "domain": "code",
-                "code": code,
-                "inputs": inputs,
-                "imports": spec.get("imports") or [],
-                "capability_tags": spec.get("capability_tags") or [],
-            }
-            if not self._executor.check_validity(draft):
-                continue
-            gold = self._executor.compute_gold_output(draft)
-            if gold is None:
-                continue
-            draft["gold_output"] = gold
-            tasks.append(draft)
-            if len(tasks) >= n:
-                break
+        tasks = self._validate_specs(specs, n)
 
         # Fallback: if memory-conditioned generation yielded nothing
         if not tasks:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "generate(): 0 valid tasks from ReAct prompt; "
                 "falling back to cold_start(%d)", n,
             )

@@ -8,6 +8,11 @@ model:
   backend: "vllm"           # served separately from Student training GPUs
   temperature: 0.7
   max_tokens: 4096
+  # Reference snippets injected into generation prompts (few-shot).
+  # Path to JSONL file with {snippet, input, output} entries.
+  # Use AZR seed data: e.g. data/7b_seed_io.jsonl
+  seed_data_path: data/seed_io.jsonl  # AZR 7b seed snippets (256 entries)
+  n_references: 6           # how many reference snippets per prompt
 
 react:
   observe_window: 50        # last N Student training steps fed to [Observe]
