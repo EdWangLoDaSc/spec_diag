@@ -15,8 +15,8 @@ RUN_DIR_BASE="${RUN_DIR_BASE:-$SPEC_DIAG_ROOT/logs/grpo_split}"
 ACTOR_MB_PER_GPU="${ACTOR_MB_PER_GPU:-1}"
 ROLLOUT_MB_PER_GPU="${ROLLOUT_MB_PER_GPU:-1}"
 REF_MB_PER_GPU="${REF_MB_PER_GPU:-1}"
-TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-32}"
-ACTOR_MINI_BATCH_SIZE="${ACTOR_MINI_BATCH_SIZE:-32}"
+TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-16}"
+ACTOR_MINI_BATCH_SIZE="${ACTOR_MINI_BATCH_SIZE:-16}"
 ROLLOUT_UPDATE_BUCKET_MB="${ROLLOUT_UPDATE_BUCKET_MB:-3072}"
 CUSTOM_REWARD_PATH="${CUSTOM_REWARD_PATH:-pkg://spec_diag.rewards.spec_diag_score}"
 
@@ -100,7 +100,7 @@ python -m spec_diag.train \
   trainer.nnodes=1 \
   trainer.project_name='spec_diag' \
   trainer.experiment_name="split_1vllm_2grpo_${TS}" \
-  trainer.logger='["console"]' \
+  trainer.logger='["console","tensorboard"]' \
   '+actor_rollout_ref.model.override_config.attn_implementation=eager' \
   '+critic.model.override_config.attn_implementation=eager' \
   ${TRAIN_OVERRIDES} \
