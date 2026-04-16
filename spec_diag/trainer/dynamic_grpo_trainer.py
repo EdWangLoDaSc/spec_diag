@@ -229,11 +229,14 @@ class _CheckpointThread(threading.Thread):
 class _FeederThread(threading.Thread):
     """Daemon thread that keeps the DynamicDataset buffer above a watermark.
 
-    Every `poll_interval_s` it asks the Ray actor for its current size; if the
-    buffer has dropped below `low_watermark` it calls
-    `generator.cold_start(feed_batch)` and pushes the result. Exceptions in
-    any single iteration are logged and swallowed — we never want the feeder
-    to crash the trainer, but we do want them visible.
+    Phase 0: calls ``generator.cold_start(feed_batch)`` whenever the buffer
+    drops below ``low_watermark``.
+
+    Phase 1 (when ``reward_tracker_handle`` is provided): queries the
+    RewardTracker for per-tag pass rates, updates ``GeneratorMemory``,
+    periodically refreshes the student profile, and calls
+    ``generator.generate(memory, feed_batch)`` instead of ``cold_start``.
+    Falls back to ``cold_start`` when no reward data is available yet.
     """
 
     def __init__(
@@ -244,6 +247,11 @@ class _FeederThread(threading.Thread):
         low_watermark: int,
         poll_interval_s: float,
         step_provider: Callable[[], int] | None = None,
+        # Phase 1
+        memory: Any = None,
+        reward_tracker_handle: Any = None,
+        generator_config: dict | None = None,
+        student_model_name: str = "",
     ) -> None:
         super().__init__(name="spec_diag-feeder", daemon=True)
         self._generator = generator
@@ -255,19 +263,93 @@ class _FeederThread(threading.Thread):
         self._stop_event = threading.Event()
         self._iter_count = 0
         self._fail_count = 0
+        # Phase 1
+        self._memory = memory
+        self._reward_tracker = reward_tracker_handle
+        self._gen_config = generator_config or {}
+        self._student_model_name = student_model_name
+        self._last_report_step: int = 0
+        self._memory_update_count: int = 0
+        self._profile_refresh_every: int = int(
+            (self._gen_config.get("memory") or {}).get("profile_refresh_every", 4)
+        )
+        # Task logging
+        self._task_log_dir: Path | None = None
+        self._batch_counter: int = 0
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop_event.set()
         if self.is_alive():
             self.join(timeout=timeout)
 
+    def set_task_log_dir(self, path: Path) -> None:
+        """Set the directory where generated tasks are saved as JSONL."""
+        self._task_log_dir = Path(path) / "tasks"
+        self._task_log_dir.mkdir(parents=True, exist_ok=True)
+
+    def _save_tasks(
+        self, tasks: list[dict], step: int, mode: str,
+    ) -> None:
+        if self._task_log_dir is None:
+            return
+        import json
+        self._batch_counter += 1
+        record = {
+            "batch": self._batch_counter,
+            "step": step,
+            "mode": mode,
+            "n_tasks": len(tasks),
+            "tasks": tasks,
+        }
+        out = self._task_log_dir / f"batch_{self._batch_counter:05d}_step{step}.json"
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+        except Exception:
+            logger.exception("spec_diag feeder: failed to save tasks to %s", out)
+
+    def _update_memory(self, step: int) -> bool:
+        """Query RewardTracker → update memory.  Returns True if memory was updated."""
+        if self._reward_tracker is None or self._memory is None:
+            return False
+        import ray
+
+        try:
+            self._reward_tracker.set_current_step.remote(step)
+            report = ray.get(
+                self._reward_tracker.get_report.remote(self._last_report_step)
+            )
+            if not report or not report.get("per_tag_pass_rates"):
+                return False
+
+            self._memory.update(report)
+            self._last_report_step = step
+            self._memory_update_count += 1
+
+            # Refresh student profile every K rounds
+            if self._memory_update_count % self._profile_refresh_every == 0:
+                from spec_diag.generator.student_profiler import build_student_profile
+                enriched = {
+                    **report,
+                    "capability_trajectory": dict(self._memory.capability_trajectory),
+                }
+                profile = build_student_profile(enriched, self._student_model_name)
+                if profile:
+                    self._memory.student_profile = profile
+                    logger.info("spec_diag feeder: refreshed student profile")
+            return True
+        except Exception:
+            logger.exception("spec_diag feeder: memory update failed")
+            return False
+
     def run(self) -> None:
         import ray
 
         logger.info(
             "spec_diag feeder: started (feed_batch=%d, low_watermark=%d, "
-            "poll=%.1fs)",
+            "poll=%.1fs, phase1=%s)",
             self._feed_batch, self._low_watermark, self._poll_interval,
+            self._reward_tracker is not None,
         )
         while not self._stop_event.is_set():
             try:
@@ -275,20 +357,31 @@ class _FeederThread(threading.Thread):
                 size = int(stats.get("size", 0))
                 if size < self._low_watermark:
                     step = int(self._step_provider())
-                    tasks = self._generator.cold_start(self._feed_batch)
+
+                    # Phase 1: try memory-conditioned generation
+                    use_memory = self._update_memory(step)
+
+                    if use_memory:
+                        tasks = self._generator.generate(
+                            self._memory, self._feed_batch
+                        )
+                    else:
+                        tasks = self._generator.cold_start(self._feed_batch)
+
                     if tasks:
                         ray.get(
                             self._handle.add_batch.remote(tasks, step)
                         )
+                        mode = "memory-conditioned" if use_memory else "cold_start"
+                        self._save_tasks(tasks, step, mode)
                         logger.info(
-                            "spec_diag feeder: +%d tasks @step=%d (buffer "
-                            "was %d, target≥%d)",
-                            len(tasks), step, size, self._low_watermark,
+                            "spec_diag feeder: +%d %s tasks @step=%d "
+                            "(buffer was %d, target≥%d)",
+                            len(tasks), mode, step, size, self._low_watermark,
                         )
                     else:
                         logger.warning(
-                            "spec_diag feeder: cold_start returned 0 valid "
-                            "tasks (all failed validity?)"
+                            "spec_diag feeder: generator returned 0 valid tasks"
                         )
                 self._iter_count += 1
             except Exception as e:  # noqa: BLE001
@@ -345,6 +438,9 @@ class DynamicGRPOTrainer:
         resource_pool_manager: Any = None,
         ray_worker_group_cls: Any = None,
         device_name: Optional[str] = None,
+        # Phase 1
+        reward_tracker_handle: Any = None,
+        generator_config: dict | None = None,
     ) -> None:
         self.config = config
         self.dynamic_dataset_handle = dynamic_dataset_handle
@@ -354,6 +450,8 @@ class DynamicGRPOTrainer:
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
         self.ray_worker_group_cls = ray_worker_group_cls
+        self.reward_tracker_handle = reward_tracker_handle
+        self.generator_config = generator_config or {}
         self.device_name = device_name
         self._inner = None
         self._feeder: Optional[_FeederThread] = None
@@ -432,7 +530,7 @@ class DynamicGRPOTrainer:
         logger.info("spec_diag warmup: buffer now has %d tasks", produced)
         return produced
 
-    def _start_feeder(self) -> None:
+    def _start_feeder(self, run_dir: Path | None = None) -> None:
         if self.generator is None:
             logger.warning(
                 "spec_diag: no generator provided — feeder thread will NOT "
@@ -441,6 +539,13 @@ class DynamicGRPOTrainer:
             return
         if self._feeder is not None and self._feeder.is_alive():
             return
+
+        # Phase 1: create memory if reward tracker is available
+        memory = None
+        if self.reward_tracker_handle is not None:
+            from spec_diag.generator.memory import GeneratorMemory
+            memory = GeneratorMemory()
+
         self._feeder = _FeederThread(
             generator=self.generator,
             dataset_handle=self.dynamic_dataset_handle,
@@ -448,7 +553,15 @@ class DynamicGRPOTrainer:
             low_watermark=int(self._feeder_cfg("low_watermark", 128)),
             poll_interval_s=float(self._feeder_cfg("poll_interval_s", 10.0)),
             step_provider=self._current_step,
+            memory=memory,
+            reward_tracker_handle=self.reward_tracker_handle,
+            generator_config=self.generator_config,
+            student_model_name=str(
+                getattr(self.config.actor_rollout_ref.model, "path", "")
+            ),
         )
+        if run_dir is not None:
+            self._feeder.set_task_log_dir(run_dir)
         self._feeder.start()
 
     def _stop_feeder(self) -> None:
@@ -513,7 +626,7 @@ class DynamicGRPOTrainer:
                 produced, low_wm,
             )
 
-        self._start_feeder()
+        self._start_feeder(run_dir)
         self._start_checkpoint(run_dir)
 
         samples_per_epoch = int(self._sd_cfg("samples_per_epoch", 1024))

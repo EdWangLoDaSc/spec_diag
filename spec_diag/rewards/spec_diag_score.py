@@ -48,5 +48,40 @@ def compute_score(
         return 0.0
 
     executor = _get_executor()
-    return float(executor.eval_student(ground_truth, solution_str))
+    score = float(executor.eval_student(ground_truth, solution_str))
+
+    # Phase 1: report to RewardTracker (fire-and-forget)
+    _try_report(
+        tags=ground_truth.get("capability_tags") or [],
+        score=score,
+        task=ground_truth,
+        response=solution_str,
+    )
+    return score
+
+
+# ---- Phase 1: reward tracking ----
+
+_tracker_handle = None
+_tracker_lookup_failed = False
+
+
+def _try_report(
+    tags: list[str],
+    score: float,
+    task: dict[str, Any] | None,
+    response: str | None,
+) -> None:
+    """Report score to the named RewardTracker actor.  Never blocks or raises."""
+    global _tracker_handle, _tracker_lookup_failed
+    if _tracker_lookup_failed:
+        return
+    try:
+        if _tracker_handle is None:
+            import ray
+            from spec_diag.rewards.reward_tracker import REWARD_TRACKER_NAME
+            _tracker_handle = ray.get_actor(REWARD_TRACKER_NAME)
+        _tracker_handle.record.remote(tags, score, task, response)
+    except Exception:
+        _tracker_lookup_failed = True
 

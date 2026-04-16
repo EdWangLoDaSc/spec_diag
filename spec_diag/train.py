@@ -247,6 +247,22 @@ def _build_spec_diag_task_runner_cls():
                 ray.get(dataset_actor.stats.remote()),
             )
 
+            # ---- Phase 1: RewardTracker named actor ----
+            from spec_diag.rewards.reward_tracker import (
+                RewardTracker, REWARD_TRACKER_NAME,
+            )
+            react_cfg = gen_cfg.get("react", {}) or {}
+            reward_tracker_handle = RewardTracker.options(
+                name=REWARD_TRACKER_NAME,
+            ).remote(
+                max_failures_per_tag=int(
+                    react_cfg.get("failure_samples_per_tag", 3) * 4
+                ),
+            )
+            actor_log.info(
+                "RewardTracker named actor created: %s", REWARD_TRACKER_NAME,
+            )
+
             # ---- construct DynamicGRPOTrainer ----
             trainer = DynamicGRPOTrainer(
                 config=config,
@@ -257,6 +273,8 @@ def _build_spec_diag_task_runner_cls():
                 role_worker_mapping=self.role_worker_mapping,
                 resource_pool_manager=resource_pool_manager,
                 ray_worker_group_cls=ray_worker_group_cls,
+                reward_tracker_handle=reward_tracker_handle,
+                generator_config=gen_cfg,
             )
 
             # build() runs the synchronous warmup + starts the feeder +
@@ -274,7 +292,13 @@ def _build_spec_diag_task_runner_cls():
                 actor_log.exception("trainer.fit() raised")
                 raise
             finally:
-                actor_log.info("trainer.fit() exited; closing generator")
+                actor_log.info("trainer.fit() exited; cleaning up")
+                try:
+                    tracker_stats = ray.get(reward_tracker_handle.stats.remote())
+                    actor_log.info("RewardTracker final stats: %s", tracker_stats)
+                    ray.kill(reward_tracker_handle)
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     generator.close()
                 except Exception:  # noqa: BLE001

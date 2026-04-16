@@ -1,11 +1,12 @@
 """ReAct Generator — frozen LLM that designs curriculum via in-context reasoning.
 
-Phase 0 scope:
   - `cold_start(n)`: seed tasks before any Student feedback exists. Prompts
     the served vLLM model to emit N `{code, inputs}` specs as a JSON list.
     We execute each spec through the `CodeExecutor` to fill in `gold_output`
     and drop anything that fails validity.
-  - `generate(memory, n)`: not implemented yet (Phase 1). See experiment_plan.md §2.2.
+  - `generate(memory, n)`: memory-conditioned generation using ReAct prompts.
+    Uses the Student's per-tag pass rates, failure examples, and natural-language
+    profile to generate targeted tasks focusing on weak areas.
 
 Talks to vLLM via the OpenAI-compatible HTTP API. Endpoint is taken from
 `OPENAI_BASE_URL` (default `http://localhost:8000/v1`) and the served model
@@ -129,11 +130,70 @@ class ReActGenerator:
         return tasks
 
     def generate(self, memory: "GeneratorMemory", n: int) -> list[dict[str, Any]]:
-        """Phase 1: ReAct round conditioned on memory. Not yet implemented."""
-        raise NotImplementedError(
-            "ReActGenerator.generate is Phase 1 (memory-conditioned). "
-            "Use cold_start for Phase 0 smoke tests."
+        """Phase 1: generate tasks conditioned on Student performance memory."""
+        from spec_diag.generator.prompts import REACT_SYSTEM, REACT_USER_TEMPLATE
+
+        ctx = memory.snapshot_prompt_context()
+
+        # Format capability summary as a table
+        cap_summary = ctx.get("capability_summary", {})
+        cap_text = "\n".join(
+            f"  {tag}: {rate:.1%}"
+            for tag, rate in sorted(cap_summary.items(), key=lambda x: x[1])
+        ) or "(no data yet)"
+
+        weak_tags = ", ".join(ctx.get("weak_tags", [])) or "(none identified)"
+        strong_tags = ", ".join(ctx.get("strong_tags", [])) or "(none identified)"
+
+        system = REACT_SYSTEM.format(n=n)
+        user = REACT_USER_TEMPLATE.format(
+            student_profile=ctx.get("student_profile") or "(no profile yet)",
+            capability_summary=cap_text,
+            weak_tags=weak_tags,
+            strong_tags=strong_tags,
+            failure_examples=ctx.get("recent_failures", "(none)"),
+            n=n,
         )
+
+        raw = self._chat(system=system, user=user)
+        specs = _parse_json_list(raw)
+
+        # Validate + compute gold_output (same logic as cold_start)
+        tasks: list[dict[str, Any]] = []
+        for spec in specs:
+            if not isinstance(spec, dict):
+                continue
+            code = spec.get("code")
+            inputs = spec.get("inputs")
+            if not isinstance(code, str) or not isinstance(inputs, str):
+                continue
+            draft: dict[str, Any] = {
+                "domain": "code",
+                "code": code,
+                "inputs": inputs,
+                "imports": spec.get("imports") or [],
+                "capability_tags": spec.get("capability_tags") or [],
+            }
+            if not self._executor.check_validity(draft):
+                continue
+            gold = self._executor.compute_gold_output(draft)
+            if gold is None:
+                continue
+            draft["gold_output"] = gold
+            tasks.append(draft)
+            if len(tasks) >= n:
+                break
+
+        # Fallback: if memory-conditioned generation yielded nothing
+        if not tasks:
+            import logging
+            logging.getLogger(__name__).warning(
+                "generate(): 0 valid tasks from ReAct prompt; "
+                "falling back to cold_start(%d)", n,
+            )
+            return self.cold_start(n)
+
+        return tasks
 
     def close(self) -> None:
         self._executor.close()
