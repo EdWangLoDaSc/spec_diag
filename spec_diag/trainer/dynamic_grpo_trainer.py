@@ -678,6 +678,35 @@ class DynamicGRPOTrainer:
             return int(getattr(self._inner, "global_steps", 0))
         return 0
 
+    # ---- validation dataset ----
+
+    def _build_val_dataset(self, poll_interval: float, max_wait: float):
+        """Build validation dataset: HumanEval if available, else dummy."""
+        test_freq = getattr(self.config.trainer, "test_freq", -1)
+        if test_freq > 0:
+            try:
+                from spec_diag.eval.humaneval_dataset import HumanEvalDataset
+                val_ds = HumanEvalDataset()
+                logger.info(
+                    "Using HumanEval validation dataset (%d problems, "
+                    "test_freq=%d)", len(val_ds), test_freq,
+                )
+                return val_ds
+            except Exception:
+                logger.warning(
+                    "Failed to load HumanEval (evalplus not installed?). "
+                    "Falling back to dummy val dataset.",
+                    exc_info=True,
+                )
+        # Fallback: 1-sample dummy so verl's len(val_dataloader) >= 1 passes
+        return DynamicMapDataset(
+            dataset_handle=self.dynamic_dataset_handle,
+            samples_per_epoch=1,
+            sample_strategy=str(self._sd_cfg("sample_strategy", "mixed")),
+            poll_interval_s=poll_interval,
+            max_wait_s=max_wait,
+        )
+
     # ---- build / fit ----
 
     def build(self, run_dir: Path | None = None):
@@ -708,18 +737,9 @@ class DynamicGRPOTrainer:
             poll_interval_s=getitem_poll,
             max_wait_s=getitem_wait,
         )
-        # Validation is disabled in config (trainer.val_before_train=false,
-        # test_freq=-1) but verl still asserts len(val_dataloader) >= 1. Pass
-        # a tiny 1-sample dataset sharing the same buffer — if val ever does
-        # run (e.g. via CLI override), it will pull real tasks from the same
-        # DynamicDataset actor.
-        val_dataset = DynamicMapDataset(
-            dataset_handle=self.dynamic_dataset_handle,
-            samples_per_epoch=1,
-            sample_strategy=str(self._sd_cfg("sample_strategy", "mixed")),
-            poll_interval_s=getitem_poll,
-            max_wait_s=getitem_wait,
-        )
+        # Use HumanEval as validation dataset if test_freq > 0.
+        # Falls back to a dummy 1-sample dataset if evalplus not available.
+        val_dataset = self._build_val_dataset(getitem_poll, getitem_wait)
 
         self._inner = RayPPOTrainer(
             config=self.config,

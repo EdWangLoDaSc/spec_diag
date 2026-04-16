@@ -38,6 +38,9 @@ def compute_score(
     For `data_source="spec_diag_code"`, `ground_truth` is the task dict injected
     by `_task_to_sample` in `dynamic_grpo_trainer.py`.
     """
+    if data_source == "humaneval":
+        return _score_humaneval(ground_truth, solution_str)
+
     if data_source != "spec_diag_code":
         # Fallback to verl's default behavior for other data sources.
         from verl.utils.reward_score import default_compute_score
@@ -58,6 +61,62 @@ def compute_score(
         response=solution_str,
     )
     return score
+
+
+# ---- HumanEval scoring via evalplus ----
+
+
+def _score_humaneval(ground_truth: Any, solution_str: str) -> float:
+    """Score a HumanEval solution using evalplus's check_correctness."""
+    if not isinstance(ground_truth, dict):
+        return 0.0
+    try:
+        from evalplus.eval._special_oracle import SPECIAL_ORACLE
+        from evalplus.evaluate import check_correctness
+
+        task_id = ground_truth.get("task_id", "")
+        prompt = ground_truth.get("prompt", "")
+        entry_point = ground_truth.get("entry_point", "")
+
+        # Reconstruct full solution: prompt + student's completion
+        solution = prompt + (solution_str or "")
+
+        # Build the evalplus problem dict
+        problem = {
+            "task_id": task_id,
+            "prompt": prompt,
+            "entry_point": entry_point,
+            "test": ground_truth.get("test", ""),
+            "base_input": ground_truth.get("plus_input"),
+            "plus_input": ground_truth.get("plus_input"),
+            "atol": ground_truth.get("atol", 0),
+        }
+
+        result = check_correctness(
+            dataset="humaneval",
+            completion_id=(task_id, 0),
+            problem=problem,
+            solution=solution,
+            expected_output=None,
+            base_only=True,  # use base HumanEval tests (not plus)
+            fast_check=True,
+            identifier=task_id,
+            min_time_limit=1.0,
+            gt_time_limit_factor=4.0,
+        )
+        # result is a dict with "base_status" or "result"
+        passed = result.get("base", [False])[0] if isinstance(result.get("base"), list) else False
+        if not passed:
+            # Try alternative result format
+            passed = result.get("result", "") == "passed"
+        return 1.0 if passed else 0.0
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug(
+            "humaneval scoring failed for %s", ground_truth.get("task_id", "?"),
+            exc_info=True,
+        )
+        return 0.0
 
 
 # ---- Phase 1: reward tracking ----
