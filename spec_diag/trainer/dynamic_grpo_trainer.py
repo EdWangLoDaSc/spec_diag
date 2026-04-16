@@ -269,9 +269,14 @@ class _FeederThread(threading.Thread):
         self._gen_config = generator_config or {}
         self._student_model_name = student_model_name
         self._last_report_step: int = 0
+        self._last_generate_step: int = 0
         self._memory_update_count: int = 0
         self._profile_refresh_every: int = int(
             (self._gen_config.get("memory") or {}).get("profile_refresh_every", 4)
+        )
+        # Regenerate every N training steps (regardless of buffer size)
+        self._regenerate_every: int = int(
+            (self._gen_config.get("react") or {}).get("regenerate_every_steps", 8)
         )
         # Task logging
         self._task_log_dir: Path | None = None
@@ -355,9 +360,20 @@ class _FeederThread(threading.Thread):
             try:
                 stats = ray.get(self._handle.stats.remote())
                 size = int(stats.get("size", 0))
-                if size < self._low_watermark:
-                    step = int(self._step_provider())
+                step = int(self._step_provider())
 
+                # Trigger new task generation when:
+                #   (a) buffer is below watermark, OR
+                #   (b) enough training steps have passed since last generation
+                #       (buffer is sampled with replacement, so it never drains
+                #        on its own — we must periodically refresh the curriculum)
+                steps_since_last = step - self._last_generate_step
+                need_generate = (
+                    size < self._low_watermark
+                    or (steps_since_last >= self._regenerate_every and step > 0)
+                )
+
+                if need_generate:
                     # Phase 1: try memory-conditioned generation
                     use_memory = self._update_memory(step)
 
@@ -372,12 +388,14 @@ class _FeederThread(threading.Thread):
                         ray.get(
                             self._handle.add_batch.remote(tasks, step)
                         )
+                        self._last_generate_step = step
                         mode = "memory-conditioned" if use_memory else "cold_start"
                         self._save_tasks(tasks, step, mode)
                         logger.info(
                             "spec_diag feeder: +%d %s tasks @step=%d "
-                            "(buffer was %d, target≥%d)",
-                            len(tasks), mode, step, size, self._low_watermark,
+                            "(buffer was %d, regen_every=%d)",
+                            len(tasks), mode, step, size,
+                            self._regenerate_every,
                         )
                     else:
                         logger.warning(

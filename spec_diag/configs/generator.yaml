@@ -13,6 +13,7 @@ react:
   observe_window: 50        # last N Student training steps fed to [Observe]
   failure_samples_per_tag: 3
   tasks_per_round: 32
+  regenerate_every_steps: 8 # refresh curriculum every N training steps
 
 memory:
   profile_refresh_every: 4  # rebuild student_profile every K rounds
