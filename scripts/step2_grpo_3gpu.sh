@@ -101,7 +101,6 @@ python -m spec_diag.train \
   trainer.project_name='spec_diag' \
   trainer.experiment_name="split_1vllm_3grpo_${TS}" \
   trainer.logger='["console","tensorboard"]' \
-  trainer.test_freq=20 \
   '+actor_rollout_ref.model.override_config.attn_implementation=eager' \
   '+critic.model.override_config.attn_implementation=eager' \
   ${TRAIN_OVERRIDES} \
