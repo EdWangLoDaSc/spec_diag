@@ -529,22 +529,38 @@ class DynamicGRPOTrainer:
             return 0
         logger.info("spec_diag warmup: cold-starting %d tasks...", n_tasks)
         produced = 0
+        consecutive_failures = 0
+        max_consecutive_failures = 3  # only abort after 3 consecutive 0-result rounds
         # Do it in chunks to give the generator natural batching.
         chunk = int(self._feeder_cfg("feed_batch", 32))
         while produced < n_tasks:
             want = min(chunk, n_tasks - produced)
             tasks = self.generator.cold_start(want)
             if not tasks:
+                consecutive_failures += 1
                 logger.warning(
                     "spec_diag warmup: cold_start(%d) returned 0 valid "
-                    "tasks; aborting warmup at %d/%d",
-                    want, produced, n_tasks,
+                    "tasks (attempt %d/%d); %d/%d produced so far",
+                    want, consecutive_failures, max_consecutive_failures,
+                    produced, n_tasks,
                 )
-                break
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.warning(
+                        "spec_diag warmup: aborting after %d consecutive "
+                        "failures at %d/%d tasks",
+                        max_consecutive_failures, produced, n_tasks,
+                    )
+                    break
+                continue
+            consecutive_failures = 0
             ray.get(
                 self.dynamic_dataset_handle.add_batch.remote(tasks, 0)
             )
             produced += len(tasks)
+            logger.info(
+                "spec_diag warmup: +%d tasks (%d/%d)",
+                len(tasks), produced, n_tasks,
+            )
         logger.info("spec_diag warmup: buffer now has %d tasks", produced)
         return produced
 

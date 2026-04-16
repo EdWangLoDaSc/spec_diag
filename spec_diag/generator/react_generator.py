@@ -209,12 +209,17 @@ class ReActGenerator:
     ) -> list[dict[str, Any]]:
         """Validate raw LLM specs → filter + compute gold_output."""
         tasks: list[dict[str, Any]] = []
+        n_format_bad = 0
+        n_validity_fail = 0
+        n_gold_fail = 0
         for spec in specs:
             if not isinstance(spec, dict):
+                n_format_bad += 1
                 continue
             code = spec.get("code")
             inputs = spec.get("inputs")
             if not isinstance(code, str) or not isinstance(inputs, str):
+                n_format_bad += 1
                 continue
             draft: dict[str, Any] = {
                 "domain": "code",
@@ -224,14 +229,23 @@ class ReActGenerator:
                 "capability_tags": spec.get("capability_tags") or [],
             }
             if not self._executor.check_validity(draft):
+                n_validity_fail += 1
                 continue
             gold = self._executor.compute_gold_output(draft)
             if gold is None:
+                n_gold_fail += 1
                 continue
             draft["gold_output"] = gold
             tasks.append(draft)
             if len(tasks) >= n:
                 break
+        total = len(specs)
+        if total > 0:
+            logger.info(
+                "validate_specs: %d/%d passed (format_bad=%d, "
+                "validity_fail=%d, gold_fail=%d)",
+                len(tasks), total, n_format_bad, n_validity_fail, n_gold_fail,
+            )
         return tasks
 
     # ---- Task generation ----

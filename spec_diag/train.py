@@ -231,8 +231,8 @@ def _build_spec_diag_task_runner_cls():
                 config={
                     "temperature": float(model_cfg.get("temperature", 0.7)),
                     "max_tokens": int(model_cfg.get("max_tokens", 4096)),
-                    "validity_timeout": 5,
-                    "validity_workers": 2,
+                    "validity_timeout": 10,
+                    "validity_workers": 4,
                     # Resolve seed_data_path relative to project root
                     # (not cwd, which may differ in Ray actors)
                     "seed_data_path": str(
