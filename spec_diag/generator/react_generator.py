@@ -207,6 +207,8 @@ def _parse_json_list(text: str) -> list[Any]:
     if not text:
         return []
     text = text.strip()
+    # strip Qwen3 <think>...</think> blocks if present
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     # strip ```json ... ``` fences if the model ignored instructions
     fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
     if fence:

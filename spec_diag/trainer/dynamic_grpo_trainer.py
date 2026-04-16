@@ -328,7 +328,7 @@ class _FeederThread(threading.Thread):
                 return False
 
             self._memory.update(report)
-            self._last_report_step = step
+            self._last_report_step = step + 1  # exclusive: next report starts after this step
             self._memory_update_count += 1
 
             # Refresh student profile every K rounds

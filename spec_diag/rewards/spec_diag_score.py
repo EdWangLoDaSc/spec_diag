@@ -63,7 +63,8 @@ def compute_score(
 # ---- Phase 1: reward tracking ----
 
 _tracker_handle = None
-_tracker_lookup_failed = False
+_tracker_miss_count = 0
+_TRACKER_MAX_RETRIES = 20  # stop trying after N consecutive failures
 
 
 def _try_report(
@@ -73,15 +74,17 @@ def _try_report(
     response: str | None,
 ) -> None:
     """Report score to the named RewardTracker actor.  Never blocks or raises."""
-    global _tracker_handle, _tracker_lookup_failed
-    if _tracker_lookup_failed:
+    global _tracker_handle, _tracker_miss_count
+    if _tracker_miss_count >= _TRACKER_MAX_RETRIES:
         return
     try:
         if _tracker_handle is None:
             import ray
             from spec_diag.rewards.reward_tracker import REWARD_TRACKER_NAME
             _tracker_handle = ray.get_actor(REWARD_TRACKER_NAME)
+            _tracker_miss_count = 0  # found it — reset counter
         _tracker_handle.record.remote(tags, score, task, response)
     except Exception:
-        _tracker_lookup_failed = True
+        _tracker_handle = None  # force re-lookup next time
+        _tracker_miss_count += 1
 

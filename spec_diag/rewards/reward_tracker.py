@@ -22,10 +22,13 @@ REWARD_TRACKER_NAME = "spec_diag_reward_tracker"
 class RewardTrackerImpl:
     """Thread-safe reward tracker.  Pure Python — testable without Ray."""
 
-    def __init__(self, max_failures_per_tag: int = 10) -> None:
+    def __init__(
+        self, max_failures_per_tag: int = 10, max_scores_per_tag: int = 2000,
+    ) -> None:
         self._lock = threading.Lock()
         self._max_failures = int(max_failures_per_tag)
-        # per-tag accumulators
+        self._max_scores = int(max_scores_per_tag)
+        # per-tag accumulators (capped ring buffers)
         self._scores: dict[str, list[float]] = defaultdict(list)
         self._steps: dict[str, list[int]] = defaultdict(list)
         self._failures: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -49,8 +52,15 @@ class RewardTrackerImpl:
             step = self._current_step
             effective_tags = tags if tags else ["_untagged"]
             for tag in effective_tags:
-                self._scores[tag].append(score)
-                self._steps[tag].append(step)
+                scores = self._scores[tag]
+                steps = self._steps[tag]
+                scores.append(score)
+                steps.append(step)
+                # Cap per-tag score history to avoid unbounded growth
+                if len(scores) > self._max_scores:
+                    trim = len(scores) - self._max_scores
+                    del scores[:trim]
+                    del steps[:trim]
                 if score < 1.0 and task is not None:
                     failures = self._failures[tag]
                     failures.append({
