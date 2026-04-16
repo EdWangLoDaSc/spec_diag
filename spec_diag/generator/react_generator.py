@@ -207,9 +207,11 @@ class ReActGenerator:
     def _validate_specs(
         self, specs: list[Any], n: int,
     ) -> list[dict[str, Any]]:
-        """Validate raw LLM specs → filter + compute gold_output."""
+        """Validate raw LLM specs → filter + dedup + compute gold_output."""
         tasks: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
         n_format_bad = 0
+        n_duplicate = 0
         n_validity_fail = 0
         n_gold_fail = 0
         for spec in specs:
@@ -221,6 +223,12 @@ class ReActGenerator:
             if not isinstance(code, str) or not isinstance(inputs, str):
                 n_format_bad += 1
                 continue
+            # Deduplicate by (code, inputs)
+            key = (code.strip(), inputs.strip())
+            if key in seen:
+                n_duplicate += 1
+                continue
+            seen.add(key)
             draft: dict[str, Any] = {
                 "domain": "code",
                 "code": code,
@@ -242,9 +250,10 @@ class ReActGenerator:
         total = len(specs)
         if total > 0:
             logger.info(
-                "validate_specs: %d/%d passed (format_bad=%d, "
+                "validate_specs: %d/%d passed (format_bad=%d, dup=%d, "
                 "validity_fail=%d, gold_fail=%d)",
-                len(tasks), total, n_format_bad, n_validity_fail, n_gold_fail,
+                len(tasks), total, n_format_bad, n_duplicate,
+                n_validity_fail, n_gold_fail,
             )
         return tasks
 
