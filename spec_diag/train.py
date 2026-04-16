@@ -148,11 +148,54 @@ def _build_spec_diag_task_runner_cls():
             )
             OmegaConf.resolve(config)
 
+            # ---- ensure custom reward function is wired ----
+            # verl's agent_loop / RewardLoopWorker calls load_reward_manager()
+            # which reads config.reward.custom_reward_function.  CLI overrides
+            # and pkg:// paths can silently fail in the Ray worker env, so we
+            # force-set them here to be safe.
+            from omegaconf import open_dict
+            with open_dict(config):
+                if not config.reward.get("custom_reward_function"):
+                    config.reward.custom_reward_function = {}
+                config.reward.custom_reward_function.path = (
+                    "pkg://spec_diag.rewards.spec_diag_score"
+                )
+                config.reward.custom_reward_function.name = "compute_score"
+                # Also set legacy top-level key in case installed verl reads it
+                if hasattr(config, "custom_reward_function"):
+                    config.custom_reward_function.path = (
+                        "pkg://spec_diag.rewards.spec_diag_score"
+                    )
+                    config.custom_reward_function.name = "compute_score"
+            actor_log.info(
+                "custom_reward_function forced: path=%s name=%s",
+                config.reward.custom_reward_function.path,
+                config.reward.custom_reward_function.name,
+            )
+
             # ---- worker / resource-pool bootstrap (verl parent helpers) ----
             actor_rollout_cls, ray_worker_group_cls = self.add_actor_rollout_worker(config)
             self.add_critic_worker(config)
-            self.add_reward_model_resource_pool(config)
-            self.add_teacher_model_resource_pool(config)
+
+            # NOTE: different verl versions expose different helper methods on
+            # TaskRunner. Keep this bootstrap backward-compatible so we can run
+            # against both bundled and env-installed verl builds.
+            add_rm_pool = getattr(self, "add_reward_model_resource_pool", None)
+            if callable(add_rm_pool):
+                add_rm_pool(config)
+            else:
+                actor_log.info(
+                    "TaskRunner has no add_reward_model_resource_pool(); skipping."
+                )
+
+            add_teacher_pool = getattr(self, "add_teacher_model_resource_pool", None)
+            if callable(add_teacher_pool):
+                add_teacher_pool(config)
+            else:
+                actor_log.info(
+                    "TaskRunner has no add_teacher_model_resource_pool(); skipping."
+                )
+
             self.add_ref_policy_worker(config, actor_rollout_cls)
 
             validate_config(
@@ -221,7 +264,7 @@ def _build_spec_diag_task_runner_cls():
             # the actor / ref / rollout worker groups, and fit() starts the
             # PPO loop.
             actor_log.info("trainer.build()")
-            trainer.build()
+            trainer.build(run_dir=actor_run_dir)
             actor_log.info("trainer.init_workers()")
             trainer.init_workers()
             actor_log.info("trainer.fit() — entering verl loop")
@@ -283,6 +326,17 @@ def main(config) -> None:
             for k in _SPEC_DIAG_ENV_PASSTHROUGH
             if os.environ.get(k) is not None
         }
+        # Ensure the project root is on PYTHONPATH so that
+        # `import spec_diag.*` works in ALL Ray workers (including
+        # RewardLoopWorker spawned by verl internals, not just our
+        # SpecDiagTaskRunner).
+        project_root = str(Path(__file__).resolve().parent.parent)
+        existing_pp = os.environ.get("PYTHONPATH", "")
+        if project_root not in existing_pp.split(os.pathsep):
+            passthrough_env["PYTHONPATH"] = (
+                f"{project_root}{os.pathsep}{existing_pp}" if existing_pp
+                else project_root
+            )
         if passthrough_env:
             default_runtime_env.setdefault("env_vars", {}).update(passthrough_env)
             print(

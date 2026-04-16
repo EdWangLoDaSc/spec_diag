@@ -11,7 +11,7 @@
 # during sampler / collate setup, so we have to set them sensibly.
 
 defaults:
-  - ppo_trainer         # verl/verl/trainer/config/ppo_trainer.yaml
+  - ppo_trainer
   - _self_
 
 algorithm:
@@ -93,6 +93,14 @@ spec_diag:
   # Sampling strategy for DynamicDataset.sample_batch(): "uniform" |
   # "recency_weighted" | "mixed" (half uniform, half recency-weighted).
   sample_strategy: mixed
+
+  # Directory for DynamicDataset checkpoint persistence. If set and a buffer.json
+  # exists, warmup will load from it instead of cold-starting. Checkpoints are
+  # saved periodically during training.
+  checkpoint_dir: null
+
+  # Seconds between buffer checkpoint saves. Default 300s (5 minutes).
+  checkpoint_interval_s: 300.0
 
   feeder:
     # Tasks per generator.cold_start() call. Bigger = fewer vLLM round trips

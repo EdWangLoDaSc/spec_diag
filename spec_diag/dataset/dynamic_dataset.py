@@ -138,6 +138,46 @@ class DynamicDatasetImpl:
         with self._lock:
             return deepcopy(self._tasks)
 
+    def save(self, path: str) -> None:
+        """Persist buffer to JSON file (thread-safe)."""
+        import json
+        import os
+        from pathlib import Path
+
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._lock:
+            data = {
+                "tasks": self._tasks,
+                "steps": self._steps,
+                "max_size": self._max_size,
+            }
+
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def load(self, path: str) -> int:
+        """Load buffer from JSON file (thread-safe). Returns number of tasks loaded."""
+        import json
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.exists():
+            return 0
+
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+
+        with self._lock:
+            self._tasks = data.get("tasks", [])
+            self._steps = data.get("steps", [])
+            # Preserve current max_size unless file has a larger one
+            file_max_size = data.get("max_size", self._max_size)
+            self._max_size = max(self._max_size, file_max_size)
+
+        return len(self._tasks)
+
 
 @ray.remote
 class DynamicDataset(DynamicDatasetImpl):

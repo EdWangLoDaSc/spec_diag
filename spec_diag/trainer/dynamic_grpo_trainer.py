@@ -35,8 +35,10 @@ installed.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -145,6 +147,85 @@ class DynamicMapDataset:
             waited += self._poll_interval
 
 
+class _CheckpointThread(threading.Thread):
+    """Daemon thread that periodically saves DynamicDataset buffer to disk."""
+
+    def __init__(
+        self,
+        dataset_handle: Any,
+        save_dir: Path,
+        interval_s: float = 300.0,
+        step_provider: Callable[[], int] | None = None,
+    ) -> None:
+        super().__init__(name="spec_diag-checkpoint", daemon=True)
+        self._handle = dataset_handle
+        self._save_dir = Path(save_dir)
+        self._interval = float(interval_s)
+        self._step_provider = step_provider or (lambda: 0)
+        self._stop_event = threading.Event()
+        self._save_count = 0
+        self._fail_count = 0
+        self._save_dir.mkdir(parents=True, exist_ok=True)
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._stop_event.set()
+        if self.is_alive():
+            self.join(timeout=timeout)
+
+    def run(self) -> None:
+        import ray
+
+        logger.info(
+            "spec_diag checkpoint: started (dir=%s, interval=%.1fs)",
+            self._save_dir, self._interval,
+        )
+        while not self._stop_event.is_set():
+            try:
+                step = int(self._step_provider())
+                # Save as buffer.json (overwrite) + buffer_step_<step>.json (versioned)
+                buf_path = self._save_dir / "buffer.json"
+                version_path = self._save_dir / f"buffer_step_{step}.json"
+
+                # Use ray actor's save method
+                ray.get(self._handle.save.remote(str(buf_path)))
+
+                # Also keep a versioned copy (keep at most 3)
+                ray.get(self._handle.save.remote(str(version_path)))
+                self._cleanup_old_checkpoints()
+
+                self._save_count += 1
+                logger.info(
+                    "spec_diag checkpoint: saved buffer @step=%d (n_tasks=%d, versioned=%s)",
+                    step,
+                    ray.get(self._handle.stats.remote()).get("size", 0),
+                    version_path.name,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._fail_count += 1
+                logger.exception(
+                    "spec_diag checkpoint: save failed: %s", e,
+                )
+            self._stop_event.wait(self._interval)
+        logger.info(
+            "spec_diag checkpoint: stopped (saves=%d, failures=%d)",
+            self._save_count, self._fail_count,
+        )
+
+    def _cleanup_old_checkpoints(self) -> None:
+        """Keep only the 3 most recent versioned checkpoints."""
+        checkpoints = sorted(
+            self._save_dir.glob("buffer_step_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        # Keep buffer.json + 3 versioned
+        for old in checkpoints[3:]:
+            try:
+                old.unlink()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 class _FeederThread(threading.Thread):
     """Daemon thread that keeps the DynamicDataset buffer above a watermark.
 
@@ -249,6 +330,8 @@ class DynamicGRPOTrainer:
         feeder.getitem_max_wait_s: float — dataset blocking timeout
         feeder.getitem_poll_interval_s: float — dataset retry cadence while
             blocked on empty buffer (should be << poll_interval_s)
+        checkpoint_dir: str     — directory to save/load buffer checkpoints
+        checkpoint_interval_s: float — seconds between checkpoint saves (default 300s)
     """
 
     def __init__(
@@ -274,6 +357,8 @@ class DynamicGRPOTrainer:
         self.device_name = device_name
         self._inner = None
         self._feeder: Optional[_FeederThread] = None
+        self._checkpoint: Optional[_CheckpointThread] = None
+        self._checkpoint_dir: Optional[Path] = None
 
     # ---- config helpers ----
 
@@ -294,9 +379,35 @@ class DynamicGRPOTrainer:
 
     # ---- buffer warmup + feeder lifecycle ----
 
-    def _warmup_buffer(self, n_tasks: int) -> int:
-        """Synchronously fill the buffer with n_tasks cold-start tasks."""
+    def _warmup_buffer(self, n_tasks: int, run_dir: Path | None = None) -> int:
+        """Synchronously fill the buffer with n_tasks cold-start tasks.
+
+        If a checkpoint exists in checkpoint_dir, load it first and skip warmup
+        if the loaded buffer already meets n_tasks.
+        """
         import ray
+
+        checkpoint_dir_cfg = self._sd_cfg("checkpoint_dir", None)
+        if checkpoint_dir_cfg is not None and run_dir is not None:
+            checkpoint_dir = Path(checkpoint_dir_cfg)
+            buf_path = checkpoint_dir / "buffer.json"
+            if buf_path.exists():
+                logger.info(
+                    "spec_diag warmup: found checkpoint at %s, loading...",
+                    buf_path,
+                )
+                loaded = ray.get(self.dynamic_dataset_handle.load.remote(str(buf_path)))
+                stats = ray.get(self.dynamic_dataset_handle.stats.remote())
+                logger.info(
+                    "spec_diag warmup: loaded %d tasks from checkpoint (tags=%s)",
+                    loaded, stats.get("tag_counts", {}),
+                )
+                if loaded >= n_tasks:
+                    logger.info(
+                        "spec_diag warmup: checkpoint has %d tasks >= %d target, skipping warmup",
+                        loaded, n_tasks,
+                    )
+                    return loaded
 
         if self.generator is None or n_tasks <= 0:
             return 0
@@ -345,6 +456,41 @@ class DynamicGRPOTrainer:
             self._feeder.stop()
             self._feeder = None
 
+    def _start_checkpoint(self, run_dir: Path | None) -> None:
+        checkpoint_dir_cfg = self._sd_cfg("checkpoint_dir", None)
+        if checkpoint_dir_cfg is None:
+            return
+        self._checkpoint_dir = Path(checkpoint_dir_cfg)
+        self._checkpoint = _CheckpointThread(
+            dataset_handle=self.dynamic_dataset_handle,
+            save_dir=self._checkpoint_dir,
+            interval_s=float(self._sd_cfg("checkpoint_interval_s", 300.0)),
+            step_provider=self._current_step,
+        )
+        self._checkpoint.start()
+        logger.info(
+            "spec_diag checkpoint: enabled (dir=%s)",
+            self._checkpoint_dir,
+        )
+
+    def _stop_checkpoint(self, final_save: bool = True) -> None:
+        if self._checkpoint is not None:
+            if final_save:
+                try:
+                    # Final save before shutdown
+                    import ray
+                    step = self._current_step()
+                    buf_path = self._checkpoint_dir / "buffer_final.json"
+                    ray.get(self.dynamic_dataset_handle.save.remote(str(buf_path)))
+                    logger.info(
+                        "spec_diag checkpoint: final save @step=%d -> %s",
+                        step, buf_path,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.exception("spec_diag checkpoint: final save failed: %s", e)
+            self._checkpoint.stop()
+            self._checkpoint = None
+
     def _current_step(self) -> int:
         if self._inner is not None:
             return int(getattr(self._inner, "global_steps", 0))
@@ -352,13 +498,13 @@ class DynamicGRPOTrainer:
 
     # ---- build / fit ----
 
-    def build(self):
+    def build(self, run_dir: Path | None = None):
         """Warm up buffer, start feeder, construct the RayPPOTrainer."""
         from verl.single_controller.ray import RayWorkerGroup
         from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
         warmup = int(self._feeder_cfg("warmup_tasks", 128))
-        produced = self._warmup_buffer(warmup)
+        produced = self._warmup_buffer(warmup, run_dir=run_dir)
         low_wm = int(self._feeder_cfg("low_watermark", 128))
         if produced < low_wm:
             logger.warning(
@@ -368,6 +514,7 @@ class DynamicGRPOTrainer:
             )
 
         self._start_feeder()
+        self._start_checkpoint(run_dir)
 
         samples_per_epoch = int(self._sd_cfg("samples_per_epoch", 1024))
         getitem_wait = float(self._feeder_cfg("getitem_max_wait_s", 300.0))
@@ -432,3 +579,4 @@ class DynamicGRPOTrainer:
             self._inner.fit()
         finally:
             self._stop_feeder()
+            self._stop_checkpoint(final_save=True)
