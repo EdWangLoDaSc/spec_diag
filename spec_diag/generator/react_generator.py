@@ -49,15 +49,25 @@ You design Python code reasoning tasks. Every task defines a pure \
 deterministic function `def f(...)` and a concrete input.
 
 There are THREE task types you can create:
-- "code_o": Student is given code + input, must predict the output.
-- "code_i": Student is given code + output, must predict a valid input.
-- "code_e": Student is given code + input, must predict the error type \
-(e.g., "ValueError", "TypeError", "IndexError") or "NoError" if no error.
+- "code_o": Student is given code + input, must predict the output. \
+The function must be COMPLETE and runnable.
+- "code_i": Student is given code + output, must deduce a valid input \
+that produces that output. The function must be COMPLETE, FULLY \
+IMPLEMENTED, and RUNNABLE — never use `pass` or leave the body empty. \
+The difficulty lies in reverse-engineering the input from the output, \
+which requires deep understanding of the algorithm.
+- "code_e": Student is given code + input, must predict the error type. \
+The code MUST ACTUALLY RAISE AN ERROR (e.g., TypeError, ValueError, \
+IndexError, KeyError, ZeroDivisionError) when run with the given input. \
+Do NOT generate code that runs successfully — the whole point is that \
+the student must trace through the code to figure out which error occurs.
 
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs inside `f` are allowed
-- Ensure the function returns a value (for code_o and code_i tasks)
-- For code_e tasks: the code may intentionally raise an error on the given input
+- ALL functions must be COMPLETE and FULLY IMPLEMENTED — never use \
+`pass`, `...`, `# TODO`, or stub implementations
+- For code_o and code_i: the function must return a value successfully
+- For code_e: the function must RAISE a specific error on the given input
 - Include at least one input parameter
 - Make the function deterministic
 - Make the snippet require state tracking across multiple data \
@@ -244,6 +254,12 @@ class ReActGenerator:
                 n_duplicate += 1
                 continue
             seen.add(key)
+            # Reject stub functions (pass, ..., # TODO)
+            code_stripped = code.strip()
+            if "pass" in code_stripped.split("\n")[-1] and task_type in ("code_i", "code_o"):
+                n_validity_fail += 1
+                continue
+
             draft: dict[str, Any] = {
                 "domain": "code",
                 "task_type": task_type,
@@ -261,11 +277,19 @@ class ReActGenerator:
                 if error_type is None:
                     n_gold_fail += 1
                     continue
+                # Reject code_e tasks that don't actually error
+                if error_type == "NoError":
+                    n_gold_fail += 1
+                    continue
                 draft["error_type"] = error_type
             else:
                 # code_o and code_i both need gold_output
                 gold = self._executor.compute_gold_output(draft)
                 if gold is None:
+                    n_gold_fail += 1
+                    continue
+                # Reject code_i tasks with trivial None output
+                if task_type == "code_i" and gold in ("None", ""):
                     n_gold_fail += 1
                     continue
                 draft["gold_output"] = gold

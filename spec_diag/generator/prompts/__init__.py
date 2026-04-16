@@ -12,15 +12,22 @@ the student improve. Focus on weak areas but include some variety.
 JSON list.
 
 There are THREE task types you can create:
-- "code_o": Student is given code + input, must predict the output.
-- "code_i": Student is given code + output, must predict a valid input.
-- "code_e": Student is given code + input, must predict the error type \
-(e.g., "ValueError", "TypeError") or "NoError".
+- "code_o": Student is given code + input, must predict the output. \
+The function must be COMPLETE and runnable.
+- "code_i": Student is given code + output, must deduce a valid input \
+that produces that output. The function must be COMPLETE, FULLY \
+IMPLEMENTED, and RUNNABLE — never use `pass` or leave the body empty.
+- "code_e": Student is given code + input, must predict the error type. \
+The code MUST ACTUALLY RAISE AN ERROR (e.g., TypeError, ValueError, \
+IndexError, KeyError, ZeroDivisionError) when run with the given input. \
+Do NOT generate code that runs successfully.
 
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs allowed
-- Ensure the function returns a value (for code_o and code_i tasks)
-- For code_e tasks: the code may intentionally raise an error on the given input
+- ALL functions must be COMPLETE and FULLY IMPLEMENTED — never use \
+`pass`, `...`, or stub implementations
+- For code_o and code_i: the function must return a value successfully
+- For code_e: the function must RAISE a specific error on the given input
 - Include at least one input parameter
 - Make the function deterministic
 - Make the snippet require state tracking across multiple data \
