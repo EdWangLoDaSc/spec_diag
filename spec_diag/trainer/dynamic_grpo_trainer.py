@@ -44,12 +44,31 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 
-_PROMPT_TEMPLATE = (
+_PROMPT_CODE_O = (
     "You are given a Python function and an input. Predict `repr(f(input))` "
     "exactly. Respond with only the predicted repr string, no prose.\n\n"
     "```python\n{code}\n```\n"
     "Input: `f({inputs})`\n"
     "Answer:"
+)
+
+_PROMPT_CODE_I = (
+    "You are given a Python function and its output. Provide one possible "
+    "input that produces this output. Format: comma-separated positional "
+    "args (quote strings). Respond with only the input, no prose.\n\n"
+    "```python\n{code}\n```\n"
+    "Output: `{gold_output}`\n"
+    "Input:"
+)
+
+_PROMPT_CODE_E = (
+    "You are given a Python function and an input. Deduce the error type "
+    "that will be raised when the code is executed with this input. If "
+    'there are no errors, answer "NoError". Respond with only the error '
+    "type name (e.g., ValueError, TypeError, NoError), no prose.\n\n"
+    "```python\n{code}\n```\n"
+    "Input: `f({inputs})`\n"
+    "Error type:"
 )
 
 
@@ -59,13 +78,29 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
     Mirrors `verl.utils.dataset.rl_dataset.RLHFDataset.__getitem__` output
     schema. Tokenization is deferred to verl's AgentLoop downstream; we only
     produce the chat-format messages list.
+
+    Supports task_type: "code_o" (output prediction, default),
+    "code_i" (input prediction), "code_e" (error prediction).
     """
     import torch
 
-    content = _PROMPT_TEMPLATE.format(
-        code=task.get("code", ""),
-        inputs=task.get("inputs", ""),
-    )
+    task_type = task.get("task_type", "code_o")
+    if task_type == "code_i":
+        content = _PROMPT_CODE_I.format(
+            code=task.get("code", ""),
+            gold_output=task.get("gold_output", ""),
+        )
+    elif task_type == "code_e":
+        content = _PROMPT_CODE_E.format(
+            code=task.get("code", ""),
+            inputs=task.get("inputs", ""),
+        )
+    else:
+        content = _PROMPT_CODE_O.format(
+            code=task.get("code", ""),
+            inputs=task.get("inputs", ""),
+        )
+
     messages = [{"role": "user", "content": content}]
     return {
         "prompt": messages,

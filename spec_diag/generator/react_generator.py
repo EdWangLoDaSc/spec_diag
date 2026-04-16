@@ -46,12 +46,18 @@ BANNED_KEYWORDS = [
 
 _COLD_START_SYSTEM = """\
 You design Python code reasoning tasks. Every task defines a pure \
-deterministic function `def f(...)` and a concrete input. The student \
-will be asked to predict `repr(f(input))`.
+deterministic function `def f(...)` and a concrete input.
+
+There are THREE task types you can create:
+- "code_o": Student is given code + input, must predict the output.
+- "code_i": Student is given code + output, must predict a valid input.
+- "code_e": Student is given code + input, must predict the error type \
+(e.g., "ValueError", "TypeError", "IndexError") or "NoError" if no error.
 
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs inside `f` are allowed
-- Ensure the function returns a value
+- Ensure the function returns a value (for code_o and code_i tasks)
+- For code_e tasks: the code may intentionally raise an error on the given input
 - Include at least one input parameter
 - Make the function deterministic
 - Make the snippet require state tracking across multiple data \
@@ -84,12 +90,13 @@ Output STRICT JSON only. No prose, no markdown fences.\
 
 _COLD_START_USER_TEMPLATE = """\
 {reference_section}\
-Produce {n} distinct tasks as a JSON list. Each element must be an \
-object with keys:
+Produce {n} distinct tasks as a JSON list. Mix task types: roughly \
+50% code_o, 25% code_i, 25% code_e. Each element must be an object \
+with keys:
+  "task_type": one of "code_o", "code_i", "code_e".
   "code": string. Python source defining `def f(...): ...`. Can include \
 helper defs and imports at the top.
-  "inputs": string. Python literal passed as positional args to f, e.g. \
-"1, 2" or "[3, 1, 2]".
+  "inputs": string. Python literal passed as positional args to f.
   "capability_tags": list[string]. 1-3 short tags describing the \
 algorithmic capability tested, e.g. "recursion", "graph", "dp", \
 "string", "tree", "backtracking", "greedy", "stack", "arithmetic".
@@ -207,7 +214,12 @@ class ReActGenerator:
     def _validate_specs(
         self, specs: list[Any], n: int,
     ) -> list[dict[str, Any]]:
-        """Validate raw LLM specs → filter + dedup + compute gold_output."""
+        """Validate raw LLM specs → filter + dedup + compute gold answer.
+
+        Supports task_type: "code_o" (default), "code_i", "code_e".
+        - code_o / code_i: compute gold_output via execution
+        - code_e: compute error_type via execution (may be "NoError")
+        """
         tasks: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         n_format_bad = 0
@@ -223,6 +235,9 @@ class ReActGenerator:
             if not isinstance(code, str) or not isinstance(inputs, str):
                 n_format_bad += 1
                 continue
+            task_type = spec.get("task_type", "code_o")
+            if task_type not in ("code_o", "code_i", "code_e"):
+                task_type = "code_o"
             # Deduplicate by (code, inputs)
             key = (code.strip(), inputs.strip())
             if key in seen:
@@ -231,6 +246,7 @@ class ReActGenerator:
             seen.add(key)
             draft: dict[str, Any] = {
                 "domain": "code",
+                "task_type": task_type,
                 "code": code,
                 "inputs": inputs,
                 "imports": spec.get("imports") or [],
@@ -239,21 +255,35 @@ class ReActGenerator:
             if not self._executor.check_validity(draft):
                 n_validity_fail += 1
                 continue
-            gold = self._executor.compute_gold_output(draft)
-            if gold is None:
-                n_gold_fail += 1
-                continue
-            draft["gold_output"] = gold
+
+            if task_type == "code_e":
+                error_type = self._executor.compute_error_type(draft)
+                if error_type is None:
+                    n_gold_fail += 1
+                    continue
+                draft["error_type"] = error_type
+            else:
+                # code_o and code_i both need gold_output
+                gold = self._executor.compute_gold_output(draft)
+                if gold is None:
+                    n_gold_fail += 1
+                    continue
+                draft["gold_output"] = gold
+
             tasks.append(draft)
             if len(tasks) >= n:
                 break
         total = len(specs)
         if total > 0:
+            type_counts = {}
+            for t in tasks:
+                tt = t.get("task_type", "code_o")
+                type_counts[tt] = type_counts.get(tt, 0) + 1
             logger.info(
                 "validate_specs: %d/%d passed (format_bad=%d, dup=%d, "
-                "validity_fail=%d, gold_fail=%d)",
+                "validity_fail=%d, gold_fail=%d, types=%s)",
                 len(tasks), total, n_format_bad, n_duplicate,
-                n_validity_fail, n_gold_fail,
+                n_validity_fail, n_gold_fail, type_counts,
             )
         return tasks
 

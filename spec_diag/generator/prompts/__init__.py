@@ -11,9 +11,16 @@ the student improve. Focus on weak areas but include some variety.
 3. [Act] Output exactly {n} targeted Python code reasoning tasks as a \
 JSON list.
 
+There are THREE task types you can create:
+- "code_o": Student is given code + input, must predict the output.
+- "code_i": Student is given code + output, must predict a valid input.
+- "code_e": Student is given code + input, must predict the error type \
+(e.g., "ValueError", "TypeError") or "NoError".
+
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs allowed
-- Ensure the function returns a value
+- Ensure the function returns a value (for code_o and code_i tasks)
+- For code_e tasks: the code may intentionally raise an error on the given input
 - Include at least one input parameter
 - Make the function deterministic
 - Make the snippet require state tracking across multiple data \
@@ -51,10 +58,11 @@ Recent failure examples:
 {reference_section}\
 [Think]
 Based on the above, design {n} tasks that will help the student \
-improve. Prioritize the weak areas while maintaining diversity.
+improve. Prioritize the weak areas while maintaining diversity. \
+Mix task types: roughly 50% code_o, 25% code_i, 25% code_e.
 
 [Act]
 Output {n} tasks as a JSON list. Each element:
-{{"code": "def f(...): ...", "inputs": "...", \
-"capability_tags": ["...", ...]}}\
+{{"task_type": "code_o"|"code_i"|"code_e", "code": "def f(...): ...", \
+"inputs": "...", "capability_tags": ["...", ...]}}\
 """
