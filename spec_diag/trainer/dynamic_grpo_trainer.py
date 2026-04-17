@@ -365,12 +365,15 @@ class _FeederThread(threading.Thread):
             return
         import json
         self._batch_counter += 1
+        # Collect LLM prompt/response logs from the generator
+        chat_logs = getattr(self._generator, "_last_chat_logs", None) or []
         record = {
             "batch": self._batch_counter,
             "step": step,
             "mode": mode,
             "n_tasks": len(tasks),
             "tasks": tasks,
+            "llm_calls": chat_logs,
         }
         out = self._task_log_dir / f"batch_{self._batch_counter:05d}_step{step}.json"
         try:
