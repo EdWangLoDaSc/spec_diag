@@ -336,18 +336,27 @@ class ReActGenerator:
         system_fn / user_fn are callables that each produce a fresh prompt for
         a single call (so references can be re-sampled per call). They receive
         the per-call `n` as argument.
+
+        Side-effect: populates ``self._last_chat_logs`` with per-call dicts
+        ``{system, user, raw_response}`` for downstream saving.
         """
         from concurrent.futures import ThreadPoolExecutor
 
         per_call = max(1, self._tasks_per_call)
         n_calls = (n + per_call - 1) // per_call
         workers = max(1, min(self._max_generation_workers, n_calls))
+        chat_logs: list[dict[str, str]] = [{}] * n_calls
 
         def _one_call(idx: int) -> list[Any]:
             k = min(per_call, n - idx * per_call)
             system = system_fn(k)
             user = user_fn(k)
             raw = self._chat(system=system, user=user)
+            chat_logs[idx] = {
+                "system": system,
+                "user": user,
+                "raw_response": raw,
+            }
             logger.info(
                 "%s[%d/%d] raw response (n=%d, len=%d chars):\n%s\n---END RAW---",
                 label, idx + 1, n_calls, k, len(raw), raw,
@@ -358,6 +367,7 @@ class ReActGenerator:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for chunk in pool.map(_one_call, range(n_calls)):
                 specs.extend(chunk)
+        self._last_chat_logs = chat_logs
         return specs
 
     def cold_start(self, n: int) -> list[dict[str, Any]]:
