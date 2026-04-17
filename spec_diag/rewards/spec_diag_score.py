@@ -41,6 +41,9 @@ def compute_score(
     if data_source == "humaneval":
         return _score_humaneval(ground_truth, solution_str)
 
+    if data_source in ("cruxeval_o", "cruxeval_i"):
+        return _score_cruxeval(ground_truth, solution_str)
+
     if data_source != "spec_diag_code":
         # Fallback to verl's default behavior for other data sources.
         from verl.utils.reward_score import default_compute_score
@@ -61,6 +64,17 @@ def compute_score(
         response=solution_str,
     )
     return score
+
+
+# ---- CRUXEval scoring ----
+
+
+def _score_cruxeval(ground_truth: Any, solution_str: str) -> float:
+    """Score a CRUXEval response using the same CodeExecutor as training."""
+    if not isinstance(ground_truth, dict):
+        return 0.0
+    executor = _get_executor()
+    return float(executor.eval_student(ground_truth, solution_str))
 
 
 # ---- HumanEval scoring via evalplus ----
