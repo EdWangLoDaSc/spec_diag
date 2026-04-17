@@ -368,15 +368,28 @@ class _FeederThread(threading.Thread):
 
             # Refresh student profile every K rounds
             if self._memory_update_count % self._profile_refresh_every == 0:
+                logger.info(
+                    "spec_diag feeder: triggering student profile refresh "
+                    "(update_count=%d, every=%d)",
+                    self._memory_update_count, self._profile_refresh_every,
+                )
                 from spec_diag.generator.student_profiler import build_student_profile
                 enriched = {
                     **report,
                     "capability_trajectory": dict(self._memory.capability_trajectory),
                 }
-                profile = build_student_profile(enriched, self._student_model_name)
-                if profile:
-                    self._memory.student_profile = profile
-                    logger.info("spec_diag feeder: refreshed student profile")
+                try:
+                    profile = build_student_profile(enriched, self._student_model_name)
+                    if profile:
+                        self._memory.student_profile = profile
+                        logger.info(
+                            "spec_diag feeder: refreshed student profile (%d chars)",
+                            len(profile),
+                        )
+                    else:
+                        logger.warning("spec_diag feeder: build_student_profile returned empty")
+                except Exception:
+                    logger.exception("spec_diag feeder: build_student_profile failed")
             return True
         except Exception:
             logger.exception("spec_diag feeder: memory update failed")
