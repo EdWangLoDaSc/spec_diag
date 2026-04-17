@@ -48,7 +48,7 @@ _COLD_START_SYSTEM = """\
 You design Python code reasoning tasks. Every task defines a pure \
 deterministic function `def f(...)` and a concrete input.
 
-There are THREE task types you can create:
+There are FOUR task types you can create:
 - "code_o": Student is given code + input, must predict the output. \
 The function must be COMPLETE and runnable.
 - "code_i": Student is given code + output, must deduce a valid input \
@@ -61,12 +61,16 @@ The code MUST ACTUALLY RAISE AN ERROR (e.g., TypeError, ValueError, \
 IndexError, KeyError, ZeroDivisionError) when run with the given input. \
 Do NOT generate code that runs successfully — the whole point is that \
 the student must trace through the code to figure out which error occurs.
+- "code_f": Student is given input/output pairs + a hint message, must \
+deduce and write the function `def f(...)` that produces those outputs. \
+Provide 3-5 diverse input/output pairs and a short descriptive message. \
+The function itself is the "hidden answer" — the student must reverse-engineer it.
 
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs inside `f` are allowed
 - ALL functions must be COMPLETE and FULLY IMPLEMENTED — never use \
 `pass`, `...`, `# TODO`, or stub implementations
-- For code_o and code_i: the function must return a value successfully
+- For code_o, code_i, code_f: the function must return a value successfully
 - For code_e: the function must RAISE a specific error on the given input
 - Include at least one input parameter
 - Make the function deterministic
@@ -101,15 +105,22 @@ Output STRICT JSON only. No prose, no markdown fences.\
 _COLD_START_USER_TEMPLATE = """\
 {reference_section}\
 Produce {n} distinct tasks as a JSON list. Mix task types: roughly \
-50% code_o, 25% code_i, 25% code_e. Each element must be an object \
-with keys:
+40% code_o, 20% code_i, 20% code_e, 20% code_f.
+
+For code_o, code_i, code_e, each element must have:
   "task_type": one of "code_o", "code_i", "code_e".
-  "code": string. Python source defining `def f(...): ...`. Can include \
-helper defs and imports at the top.
+  "code": string. Python source defining `def f(...): ...`.
   "inputs": string. Python literal passed as positional args to f.
-  "capability_tags": list[string]. 1-3 short tags describing the \
-algorithmic capability tested, e.g. "recursion", "graph", "dp", \
-"string", "tree", "backtracking", "greedy", "stack", "arithmetic".
+  "capability_tags": list[string]. 1-3 tags like "recursion", "graph", \
+"dp", "string", "tree", "backtracking", "greedy", "stack".
+
+For code_f, each element must have:
+  "task_type": "code_f".
+  "code": string. The hidden gold function `def f(...)`.
+  "inputs_list": list[string]. 3-5 diverse inputs as Python literals.
+  "message": string. A short hint describing what f does (without \
+revealing the implementation).
+  "capability_tags": list[string]. 1-3 tags.
 
 Return ONLY the JSON list.\
 """
@@ -248,13 +259,54 @@ class ReActGenerator:
                 n_format_bad += 1
                 continue
             code = spec.get("code")
+            task_type = spec.get("task_type", "code_o")
+            if task_type not in ("code_o", "code_i", "code_e", "code_f"):
+                task_type = "code_o"
+
+            # code_f has different required fields
+            if task_type == "code_f":
+                inputs_list = spec.get("inputs_list")
+                message = spec.get("message", "")
+                if (not isinstance(code, str) or not isinstance(inputs_list, list)
+                        or len(inputs_list) < 2):
+                    n_format_bad += 1
+                    continue
+                key = (code.strip(), str(inputs_list))
+                if key in seen:
+                    n_duplicate += 1
+                    continue
+                seen.add(key)
+                # Use first input for validity check
+                draft: dict[str, Any] = {
+                    "domain": "code",
+                    "task_type": "code_f",
+                    "code": code,
+                    "inputs": inputs_list[0],
+                    "imports": spec.get("imports") or [],
+                    "capability_tags": spec.get("capability_tags") or [],
+                    "message": message,
+                }
+                if not self._executor.check_validity(draft):
+                    n_validity_fail += 1
+                    continue
+                io_pairs = self._executor.compute_io_pairs(
+                    draft, inputs_list,
+                )
+                if io_pairs is None or len(io_pairs) < 2:
+                    n_gold_fail += 1
+                    continue
+                draft["io_pairs"] = io_pairs
+                draft.pop("inputs", None)
+                tasks.append(draft)
+                if len(tasks) >= n:
+                    break
+                continue
+
+            # code_o / code_i / code_e
             inputs = spec.get("inputs")
             if not isinstance(code, str) or not isinstance(inputs, str):
                 n_format_bad += 1
                 continue
-            task_type = spec.get("task_type", "code_o")
-            if task_type not in ("code_o", "code_i", "code_e"):
-                task_type = "code_o"
             # Deduplicate by (code, inputs)
             key = (code.strip(), inputs.strip())
             if key in seen:
@@ -275,7 +327,7 @@ class ReActGenerator:
                     n_validity_fail += 1
                     continue
 
-            draft: dict[str, Any] = {
+            draft = {
                 "domain": "code",
                 "task_type": task_type,
                 "code": code,

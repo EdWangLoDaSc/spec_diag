@@ -11,7 +11,7 @@ the student improve. Focus on weak areas but include some variety.
 3. [Act] Output exactly {n} targeted Python code reasoning tasks as a \
 JSON list.
 
-There are THREE task types you can create:
+There are FOUR task types you can create:
 - "code_o": Student is given code + input, must predict the output. \
 The function must be COMPLETE and runnable.
 - "code_i": Student is given code + output, must deduce a valid input \
@@ -21,12 +21,15 @@ IMPLEMENTED, and RUNNABLE — never use `pass` or leave the body empty.
 The code MUST ACTUALLY RAISE AN ERROR (e.g., TypeError, ValueError, \
 IndexError, KeyError, ZeroDivisionError) when run with the given input. \
 Do NOT generate code that runs successfully.
+- "code_f": Student is given input/output pairs + a hint message, must \
+deduce and write the function. Provide 3-5 diverse inputs via \
+"inputs_list" and a short "message" hint.
 
 ### Code Requirements:
 - Name the entry function `f` (e.g., `def f(...): ...`); nested defs allowed
 - ALL functions must be COMPLETE and FULLY IMPLEMENTED — never use \
 `pass`, `...`, or stub implementations
-- For code_o and code_i: the function must return a value successfully
+- For code_o, code_i, code_f: the function must return a value successfully
 - For code_e: the function must RAISE a specific error on the given input
 - Include at least one input parameter
 - Make the function deterministic
@@ -66,10 +69,12 @@ Recent failure examples:
 [Think]
 Based on the above, design {n} tasks that will help the student \
 improve. Prioritize the weak areas while maintaining diversity. \
-Mix task types: roughly 50% code_o, 25% code_i, 25% code_e.
+Mix task types: roughly 40% code_o, 20% code_i, 20% code_e, 20% code_f.
 
 [Act]
-Output {n} tasks as a JSON list. Each element:
-{{"task_type": "code_o"|"code_i"|"code_e", "code": "def f(...): ...", \
-"inputs": "...", "capability_tags": ["...", ...]}}\
+Output {n} tasks as a JSON list.
+For code_o/code_i/code_e: {{"task_type": "...", "code": "def f(...): ...", \
+"inputs": "...", "capability_tags": [...]}}
+For code_f: {{"task_type": "code_f", "code": "def f(...): ...", \
+"inputs_list": ["...", ...], "message": "...", "capability_tags": [...]}}\
 """

@@ -71,6 +71,24 @@ _PROMPT_CODE_E = (
     "Error type:"
 )
 
+_PROMPT_CODE_F = (
+    "Given the following input/output pairs and a hint message, deduce "
+    "the Python function `def f(...)` that produces these outputs from "
+    "these inputs. Your function must handle ALL the given pairs correctly. "
+    "Respond with only the function definition, no prose.\n\n"
+    "{io_pairs_text}\n"
+    "Hint: {message}\n\n"
+    "Write the function `def f(...)`:"
+)
+
+
+def _format_io_pairs(io_pairs: list[dict[str, str]]) -> str:
+    """Format io_pairs for the code_f prompt."""
+    lines = []
+    for i, pair in enumerate(io_pairs, 1):
+        lines.append(f"  f({pair['input']}) → {pair['output']}")
+    return "Input/Output pairs:\n" + "\n".join(lines)
+
 
 def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
     """Convert a spec_diag task dict into a verl-compatible dataset row.
@@ -80,7 +98,8 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
     produce the chat-format messages list.
 
     Supports task_type: "code_o" (output prediction, default),
-    "code_i" (input prediction), "code_e" (error prediction).
+    "code_i" (input prediction), "code_e" (error prediction),
+    "code_f" (function deduction).
     """
     import torch
 
@@ -94,6 +113,11 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
         content = _PROMPT_CODE_E.format(
             code=task.get("code", ""),
             inputs=task.get("inputs", ""),
+        )
+    elif task_type == "code_f":
+        content = _PROMPT_CODE_F.format(
+            io_pairs_text=_format_io_pairs(task.get("io_pairs", [])),
+            message=task.get("message", "(no hint)"),
         )
     else:
         content = _PROMPT_CODE_O.format(

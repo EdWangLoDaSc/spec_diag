@@ -122,6 +122,25 @@ class CodeExecutor(Executor):
         # result is "NoError" or an error type like "ValueError"
         return result
 
+    def compute_io_pairs(
+        self, task: dict[str, Any], inputs_list: list[str],
+    ) -> list[dict[str, str]] | None:
+        """Run the gold function on multiple inputs to get io_pairs.
+        Returns None if any execution fails."""
+        code = task.get("code")
+        if not isinstance(code, str):
+            return None
+        imports = task.get("imports") or []
+        pairs = []
+        for inp in inputs_list:
+            output, status = self._pyexec.run_code(
+                code=code, inputs=inp, imports=imports,
+            )
+            if "error" in status.lower() or not output:
+                return None
+            pairs.append({"input": inp, "output": output})
+        return pairs
+
     # ---- student evaluation ----
 
     def eval_student(self, task: dict[str, Any], response: str) -> float:
@@ -133,6 +152,8 @@ class CodeExecutor(Executor):
             return self._eval_input(task, response)
         elif task_type == "code_e":
             return self._eval_error(task, response)
+        elif task_type == "code_f":
+            return self._eval_function(task, response)
         return 0.0
 
     def _eval_output(self, task: dict[str, Any], response: str) -> float:
@@ -185,6 +206,38 @@ class CodeExecutor(Executor):
         if agent_error.lower() == gold_error.lower():
             return 1.0
         return 0.0
+
+    def _eval_function(self, task: dict[str, Any], response: str) -> float:
+        """code_f: given io_pairs + message, student writes a function.
+        Grade by running student's function on all inputs and comparing outputs."""
+        io_pairs = task.get("io_pairs")
+        if not io_pairs or not isinstance(io_pairs, list):
+            return 0.0
+        student_code = (response or "").strip()
+        if not student_code:
+            return 0.0
+        # Strip markdown fences if present
+        import re
+        fence = re.match(r"^```(?:python)?\s*(.*?)\s*```$", student_code, re.DOTALL)
+        if fence:
+            student_code = fence.group(1).strip()
+        # Student must define function f
+        if "def f" not in student_code:
+            return 0.0
+        # Test on each io pair
+        correct = 0
+        for pair in io_pairs:
+            inp = pair.get("input", "")
+            expected = pair.get("output", "")
+            try:
+                output, status = self._pyexec.run_code(
+                    code=student_code, inputs=inp, imports=[],
+                )
+                if "error" not in status.lower() and output == expected:
+                    correct += 1
+            except Exception:
+                pass
+        return correct / len(io_pairs) if io_pairs else 0.0
 
     def close(self) -> None:
         self._pyexec.cleanup()
