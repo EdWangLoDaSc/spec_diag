@@ -66,6 +66,9 @@ Recent failure examples:
 {failure_examples}
 
 {reference_section}\
+[Difficulty]
+{difficulty_hint}
+
 [Think]
 Based on the above, design {n} tasks that will help the student \
 improve. Prioritize the weak areas while maintaining diversity. \

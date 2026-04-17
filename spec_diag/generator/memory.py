@@ -93,6 +93,18 @@ class GeneratorMemory:
             sorted_tags = sorted(capability_summary.items(), key=lambda x: x[1])
             capability_summary = dict(sorted_tags[:30])
 
+        # Overall pass rate across all tags (weighted by sample count)
+        total_samples = 0
+        weighted_sum = 0.0
+        per_tag_counts = {}
+        for entry in self.task_history:
+            for tag, rate in entry.get("per_tag_pass_rates", {}).items():
+                if tag in capability_summary:
+                    weighted_sum += rate
+                    total_samples += 1
+                    per_tag_counts[tag] = per_tag_counts.get(tag, 0) + 1
+        overall_pass_rate = weighted_sum / total_samples if total_samples > 0 else 0.0
+
         # Format recent failures as readable text
         formatted: list[str] = []
         for f in self.recent_failures[-9:]:
@@ -106,6 +118,28 @@ class GeneratorMemory:
                 f"Score: {f.get('score', 0.0)}"
             )
 
+        # Difficulty guidance based on overall pass rate
+        if overall_pass_rate < 0.3:
+            difficulty_hint = (
+                "The student is struggling (overall {:.0f}% pass rate). "
+                "Generate EASIER tasks — simpler logic, shorter code, "
+                "more straightforward inputs. The student needs to build "
+                "confidence before tackling complex problems."
+            ).format(overall_pass_rate * 100)
+        elif overall_pass_rate > 0.7:
+            difficulty_hint = (
+                "The student is performing well (overall {:.0f}% pass rate). "
+                "Generate HARDER tasks — deeper recursion, more complex "
+                "data structures, trickier edge cases. Push the student "
+                "beyond their comfort zone."
+            ).format(overall_pass_rate * 100)
+        else:
+            difficulty_hint = (
+                "The student is in the learning zone (overall {:.0f}% pass rate). "
+                "Maintain current difficulty level. Target tasks where the "
+                "student has ~30-70% chance of success."
+            ).format(overall_pass_rate * 100)
+
         return {
             "student_profile": self.student_profile,
             "capability_trajectory": {
@@ -115,4 +149,6 @@ class GeneratorMemory:
             "weak_tags": weak_tags,
             "strong_tags": strong_tags,
             "capability_summary": capability_summary,
+            "overall_pass_rate": overall_pass_rate,
+            "difficulty_hint": difficulty_hint,
         }
