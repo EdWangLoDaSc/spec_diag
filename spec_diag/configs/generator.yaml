@@ -4,7 +4,7 @@
 # Qwen3 默认带 thinking mode,prompt 里可加 /no_think 关掉,或靠 chat_template 控制.
 
 model:
-  name: "Qwen/Qwen3-8B"
+  name: "Qwen/Qwen2.5-7B-Instruct"
   backend: "vllm"           # served separately from Student training GPUs
   temperature: 0.7
   max_tokens: 4096
@@ -13,6 +13,10 @@ model:
   # Use AZR seed data: e.g. data/7b_seed_io.jsonl
   seed_data_path: data/seed_io.jsonl  # AZR 7b seed snippets (256 entries)
   n_references: 6           # how many reference snippets per prompt
+  # How many tasks to ask for per LLM call. A single JSON list of 64 tasks
+  # easily blows past max_tokens; split into small chunks and fan out.
+  tasks_per_call: 4
+  max_generation_workers: 8
 
 react:
   observe_window: 50        # last N Student training steps fed to [Observe]
