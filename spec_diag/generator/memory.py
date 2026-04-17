@@ -59,13 +59,27 @@ class GeneratorMemory:
             self.task_history = self.task_history[-self._max_history:]
 
     def snapshot_prompt_context(self) -> dict[str, Any]:
-        """Return the working-memory dict injected into the next ReAct prompt."""
+        """Return the working-memory dict injected into the next ReAct prompt.
+
+        Only includes tags with enough samples (per_tag_counts >= 3) to
+        avoid noisy 0% / 100% tags from single observations. Caps the
+        summary at 30 tags to keep the prompt manageable.
+        """
         weak_tags: list[str] = []
         strong_tags: list[str] = []
         capability_summary: dict[str, float] = {}
 
+        # Filter: only tags with enough data points across all updates
+        per_tag_total_samples: dict[str, int] = {}
+        for entry in self.task_history:
+            for tag in entry.get("per_tag_pass_rates", {}):
+                per_tag_total_samples[tag] = per_tag_total_samples.get(tag, 0) + 1
+
         for tag, trajectory in self.capability_trajectory.items():
             if not trajectory:
+                continue
+            # Skip tags with fewer than 3 observations
+            if per_tag_total_samples.get(tag, 0) < 3:
                 continue
             latest = trajectory[-1]
             capability_summary[tag] = latest
@@ -73,6 +87,11 @@ class GeneratorMemory:
                 weak_tags.append(tag)
             elif latest > 0.8:
                 strong_tags.append(tag)
+
+        # Cap at 30 tags sorted by pass rate (show weakest first)
+        if len(capability_summary) > 30:
+            sorted_tags = sorted(capability_summary.items(), key=lambda x: x[1])
+            capability_summary = dict(sorted_tags[:30])
 
         # Format recent failures as readable text
         formatted: list[str] = []

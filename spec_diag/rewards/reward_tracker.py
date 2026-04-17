@@ -50,7 +50,7 @@ class RewardTrackerImpl:
     ) -> None:
         with self._lock:
             step = self._current_step
-            effective_tags = tags if tags else ["_untagged"]
+            effective_tags = [_normalize_tag(t) for t in tags] if tags else ["_untagged"]
             for tag in effective_tags:
                 scores = self._scores[tag]
                 steps = self._steps[tag]
@@ -138,6 +138,14 @@ class RewardTracker(RewardTrackerImpl):
 
 
 # ---- helpers ----
+
+def _normalize_tag(tag: str) -> str:
+    """Normalize capability tags to reduce fragmentation.
+
+    'error handling', 'error_handling', 'error-handling' → 'error_handling'
+    """
+    return tag.strip().lower().replace(" ", "_").replace("-", "_")
+
 
 def _summarise_task(task: dict[str, Any]) -> dict[str, Any]:
     """Keep only the fields needed for failure reporting (avoid bloat)."""
