@@ -74,7 +74,8 @@ _PROMPT_CODE_E = (
 _PROMPT_CODE_F = (
     "Given the following input/output pairs and a hint message, deduce "
     "the Python function `def f(...)` that produces these outputs from "
-    "these inputs. Your function must handle ALL the given pairs correctly. "
+    "these inputs. Your function will be tested on HIDDEN inputs not shown "
+    "here, so it must generalize correctly. "
     "Respond with only the function definition, no prose.\n\n"
     "{io_pairs_text}\n"
     "Hint: {message}\n\n"
@@ -82,11 +83,17 @@ _PROMPT_CODE_F = (
 )
 
 
-def _format_io_pairs(io_pairs: list[dict[str, str]]) -> str:
-    """Format io_pairs for the code_f prompt."""
+def _format_io_pairs_given(io_pairs: list[dict[str, str]]) -> str:
+    """Format only the GIVEN half of io_pairs for the code_f prompt.
+    The hidden half is withheld for evaluation."""
+    n_given = len(io_pairs) // 2
+    given = io_pairs[:n_given] if n_given > 0 else io_pairs
     lines = []
-    for i, pair in enumerate(io_pairs, 1):
-        lines.append(f"  f({pair['input']}) → {pair['output']}")
+    for i, pair in enumerate(given):
+        lines.append(
+            f"```input_{i}\n{pair['input']}\n```\n"
+            f"```output_{i}\n{pair['output']}\n```"
+        )
     return "Input/Output pairs:\n" + "\n".join(lines)
 
 
@@ -116,7 +123,7 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
         )
     elif task_type == "code_f":
         content = _PROMPT_CODE_F.format(
-            io_pairs_text=_format_io_pairs(task.get("io_pairs", [])),
+            io_pairs_text=_format_io_pairs_given(task.get("io_pairs", [])),
             message=task.get("message", "(no hint)"),
         )
     else:

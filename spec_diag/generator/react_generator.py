@@ -63,7 +63,7 @@ Do NOT generate code that runs successfully — the whole point is that \
 the student must trace through the code to figure out which error occurs.
 - "code_f": Student is given input/output pairs + a hint message, must \
 deduce and write the function `def f(...)` that produces those outputs. \
-Provide 3-5 diverse input/output pairs and a short descriptive message. \
+Provide 4-6 diverse inputs via "inputs_list" and a short descriptive message. \
 The function itself is the "hidden answer" — the student must reverse-engineer it.
 
 ### Code Requirements:

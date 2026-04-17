@@ -209,7 +209,12 @@ class CodeExecutor(Executor):
 
     def _eval_function(self, task: dict[str, Any], response: str) -> float:
         """code_f: given io_pairs + message, student writes a function.
-        Grade by running student's function on all inputs and comparing outputs."""
+
+        Evaluation follows AZR's approach: only test on hidden_pairs
+        (second half of io_pairs — not shown to student). Uses
+        eval_input_prediction (gold_output == f(agent_input)) for
+        exact-match comparison, returning mean accuracy.
+        """
         io_pairs = task.get("io_pairs")
         if not io_pairs or not isinstance(io_pairs, list):
             return 0.0
@@ -224,20 +229,23 @@ class CodeExecutor(Executor):
         # Student must define function f
         if "def f" not in student_code:
             return 0.0
-        # Test on each io pair
-        correct = 0
-        for pair in io_pairs:
+        # Only test on hidden pairs (second half, not shown to student)
+        n_given = len(io_pairs) // 2
+        hidden_pairs = io_pairs[n_given:] if n_given > 0 else io_pairs
+        # Use eval_input_prediction: gold_output == f(agent_input)
+        scores = []
+        for pair in hidden_pairs:
             inp = pair.get("input", "")
             expected = pair.get("output", "")
-            try:
-                output, status = self._pyexec.run_code(
-                    code=student_code, inputs=inp, imports=[],
-                )
-                if "error" not in status.lower() and output == expected:
-                    correct += 1
-            except Exception:
-                pass
-        return correct / len(io_pairs) if io_pairs else 0.0
+            score = self._pyexec.eval_input_prediction(
+                code=student_code,
+                gold_output=expected,
+                agent_input=inp,
+                imports=[],
+            )
+            if score is not None:
+                scores.append(float(score))
+        return sum(scores) / len(scores) if scores else 0.0
 
     def close(self) -> None:
         self._pyexec.cleanup()
