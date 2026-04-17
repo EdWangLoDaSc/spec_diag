@@ -712,20 +712,20 @@ class DynamicGRPOTrainer:
     # ---- validation dataset ----
 
     def _build_val_dataset(self, poll_interval: float, max_wait: float):
-        """Build validation dataset: HumanEval if available, else dummy."""
+        """Build validation dataset: CRUXEval if available, else dummy."""
         test_freq = getattr(self.config.trainer, "test_freq", -1)
         if test_freq > 0:
             try:
-                from spec_diag.eval.humaneval_dataset import HumanEvalDataset
-                val_ds = HumanEvalDataset()
+                from spec_diag.eval.cruxeval_dataset import CRUXEvalDataset
+                val_ds = CRUXEvalDataset()
                 logger.info(
-                    "Using HumanEval validation dataset (%d problems, "
+                    "Using CRUXEval validation dataset (%d samples, "
                     "test_freq=%d)", len(val_ds), test_freq,
                 )
                 return val_ds
             except Exception:
                 logger.warning(
-                    "Failed to load HumanEval (evalplus not installed?). "
+                    "Failed to load CRUXEval. "
                     "Falling back to dummy val dataset.",
                     exc_info=True,
                 )
