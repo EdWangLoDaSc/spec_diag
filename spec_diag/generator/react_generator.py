@@ -415,6 +415,8 @@ class ReActGenerator:
         if len(failures_text) > 1500:
             failures_text = failures_text[:1500] + "\n... (truncated)"
 
+        difficulty_hint = ctx.get("difficulty_hint", "Maintain moderate difficulty.")
+
         def _user(k: int) -> str:
             return REACT_USER_TEMPLATE.format(
                 student_profile=ctx.get("student_profile") or "(no profile yet)",
@@ -423,6 +425,7 @@ class ReActGenerator:
                 strong_tags=strong_tags,
                 failure_examples=failures_text,
                 reference_section=self._sample_references(n=3),
+                difficulty_hint=difficulty_hint,
                 n=k,
             )
 
