@@ -129,6 +129,13 @@ class ReActGenerator:
         self._client = None  # lazy
         self._seed_snippets: list[dict[str, Any]] | None = None
         self._n_references = int(self.config.get("n_references", 6))
+        # How many tasks to ask for in a single LLM call. Small values keep each
+        # response well under max_tokens; we fire multiple calls concurrently to
+        # reach the requested batch size.
+        self._tasks_per_call = int(self.config.get("tasks_per_call", 4))
+        self._max_generation_workers = int(
+            self.config.get("max_generation_workers", 8)
+        )
 
     # ---- OpenAI client ----
 
@@ -254,11 +261,19 @@ class ReActGenerator:
                 n_duplicate += 1
                 continue
             seen.add(key)
-            # Reject stub functions (pass, ..., # TODO)
-            code_stripped = code.strip()
-            if "pass" in code_stripped.split("\n")[-1] and task_type in ("code_i", "code_o"):
+            # Reject stub/incomplete functions
+            code_lower = code.lower()
+            if any(marker in code_lower for marker in
+                   ("# todo", "# implement", "# your code", "notimplementederror")):
                 n_validity_fail += 1
                 continue
+            # Reject if function body is just "pass" or "return -1" placeholder
+            lines = [l.strip() for l in code.strip().split("\n") if l.strip()]
+            body_lines = [l for l in lines if not l.startswith(("def ", "from ", "import ", "#", "@"))]
+            if body_lines and body_lines[-1] in ("pass", "return -1", "return None", "..."):
+                if task_type in ("code_i", "code_o"):
+                    n_validity_fail += 1
+                    continue
 
             draft: dict[str, Any] = {
                 "domain": "code",
@@ -313,17 +328,52 @@ class ReActGenerator:
 
     # ---- Task generation ----
 
+    def _fanout_chat(
+        self, system_fn, user_fn, n: int, label: str,
+    ) -> list[Any]:
+        """Issue ceil(n / tasks_per_call) concurrent _chat calls.
+
+        system_fn / user_fn are callables that each produce a fresh prompt for
+        a single call (so references can be re-sampled per call). They receive
+        the per-call `n` as argument.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        per_call = max(1, self._tasks_per_call)
+        n_calls = (n + per_call - 1) // per_call
+        workers = max(1, min(self._max_generation_workers, n_calls))
+
+        def _one_call(idx: int) -> list[Any]:
+            k = min(per_call, n - idx * per_call)
+            system = system_fn(k)
+            user = user_fn(k)
+            raw = self._chat(system=system, user=user)
+            logger.info(
+                "%s[%d/%d] raw response (n=%d, len=%d chars):\n%s\n---END RAW---",
+                label, idx + 1, n_calls, k, len(raw), raw,
+            )
+            return _parse_json_list(raw)
+
+        specs: list[Any] = []
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for chunk in pool.map(_one_call, range(n_calls)):
+                specs.extend(chunk)
+        return specs
+
     def cold_start(self, n: int) -> list[dict[str, Any]]:
         """Generate `n` seed tasks with gold outputs computed locally."""
-        system = _COLD_START_SYSTEM.format(
-            banned_keywords=", ".join(BANNED_KEYWORDS),
-        )
-        user = _COLD_START_USER_TEMPLATE.format(
-            n=n,
-            reference_section=self._sample_references(),
-        )
-        raw = self._chat(system=system, user=user)
-        specs = _parse_json_list(raw)
+        def _system(_k: int) -> str:
+            return _COLD_START_SYSTEM.format(
+                banned_keywords=", ".join(BANNED_KEYWORDS),
+            )
+
+        def _user(k: int) -> str:
+            return _COLD_START_USER_TEMPLATE.format(
+                n=k,
+                reference_section=self._sample_references(),
+            )
+
+        specs = self._fanout_chat(_system, _user, n, label="cold_start")
         return self._validate_specs(specs, n)
 
     def generate(self, memory: "GeneratorMemory", n: int) -> list[dict[str, Any]]:
@@ -342,22 +392,31 @@ class ReActGenerator:
         weak_tags = ", ".join(ctx.get("weak_tags", [])) or "(none identified)"
         strong_tags = ", ".join(ctx.get("strong_tags", [])) or "(none identified)"
 
-        system = REACT_SYSTEM.format(
-            n=n,
-            banned_keywords=", ".join(BANNED_KEYWORDS),
-        )
-        user = REACT_USER_TEMPLATE.format(
-            student_profile=ctx.get("student_profile") or "(no profile yet)",
-            capability_summary=cap_text,
-            weak_tags=weak_tags,
-            strong_tags=strong_tags,
-            failure_examples=ctx.get("recent_failures", "(none)"),
-            reference_section=self._sample_references(),
-            n=n,
-        )
+        def _system(k: int) -> str:
+            return REACT_SYSTEM.format(
+                n=k,
+                banned_keywords=", ".join(BANNED_KEYWORDS),
+            )
 
-        raw = self._chat(system=system, user=user)
-        specs = _parse_json_list(raw)
+        # generate() prompt is longer than cold_start (adds memory context),
+        # so use fewer references (3 vs 6) and truncate failures to stay
+        # within context limit.
+        failures_text = ctx.get("recent_failures", "(none)")
+        if len(failures_text) > 1500:
+            failures_text = failures_text[:1500] + "\n... (truncated)"
+
+        def _user(k: int) -> str:
+            return REACT_USER_TEMPLATE.format(
+                student_profile=ctx.get("student_profile") or "(no profile yet)",
+                capability_summary=cap_text,
+                weak_tags=weak_tags,
+                strong_tags=strong_tags,
+                failure_examples=failures_text,
+                reference_section=self._sample_references(n=3),
+                n=k,
+            )
+
+        specs = self._fanout_chat(_system, _user, n, label="generate")
         tasks = self._validate_specs(specs, n)
 
         # Fallback: if memory-conditioned generation yielded nothing
