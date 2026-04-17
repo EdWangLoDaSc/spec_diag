@@ -91,8 +91,14 @@ def build_student_profile(
             temperature=0.3,
             max_tokens=256,
         )
-        profile = (resp.choices[0].message.content or "").strip()
-        logger.info("student_profiler: generated profile (%d chars)", len(profile))
+        raw = (resp.choices[0].message.content or "").strip()
+        # Strip Qwen3 <think> blocks if present
+        import re
+        profile = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        logger.info(
+            "student_profiler: generated profile (%d chars, raw=%d)",
+            len(profile), len(raw),
+        )
         return profile
     except Exception:
         logger.exception("student_profiler: LLM call failed")
