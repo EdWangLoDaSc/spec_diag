@@ -259,12 +259,16 @@ def _build_spec_diag_task_runner_cls():
                 RewardTracker, REWARD_TRACKER_NAME,
             )
             react_cfg = gen_cfg.get("react", {}) or {}
+            n_rollouts = int(
+                config.actor_rollout_ref.rollout.get("n", 8)
+            )
             reward_tracker_handle = RewardTracker.options(
                 name=REWARD_TRACKER_NAME,
             ).remote(
                 max_failures_per_tag=int(
                     react_cfg.get("failure_samples_per_tag", 3) * 4
                 ),
+                n_rollouts=n_rollouts,
             )
             actor_log.info(
                 "RewardTracker named actor created: %s", REWARD_TRACKER_NAME,

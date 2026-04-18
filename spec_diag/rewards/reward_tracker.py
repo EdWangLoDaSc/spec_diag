@@ -24,6 +24,7 @@ class RewardTrackerImpl:
 
     def __init__(
         self, max_failures_per_tag: int = 10, max_scores_per_tag: int = 2000,
+        n_rollouts: int = 8,
     ) -> None:
         self._lock = threading.Lock()
         self._max_failures = int(max_failures_per_tag)
@@ -34,6 +35,7 @@ class RewardTrackerImpl:
         self._failures: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._current_step: int = 0
         self._total_recorded: int = 0
+        self._n_rollouts: int = int(n_rollouts)
         # Per-task mastery tracking: key → consecutive perfect count
         # key = (code[:100], inputs[:100]) or (code[:100], problem[:100])
         self._task_perfect_streak: dict[tuple[str, str], int] = {}
@@ -132,13 +134,14 @@ class RewardTrackerImpl:
         consecutive times (across rollouts). These tasks are "mastered"
         and can be evicted from the buffer.
 
-        With GRPO n=8, each training step produces 8 record() calls per task.
-        threshold=3 means 3×8=24 consecutive perfect scores.
+        Each training step produces n_rollouts record() calls per task.
+        threshold=3 means 3 × n_rollouts consecutive perfect scores.
         """
         with self._lock:
+            min_streak = threshold * self._n_rollouts
             mastered = [
                 k for k, count in self._task_perfect_streak.items()
-                if count >= threshold * 8  # 8 rollouts per step
+                if count >= min_streak
             ]
             self._mastered_keys.update(mastered)
             return mastered
