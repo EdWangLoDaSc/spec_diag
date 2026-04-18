@@ -38,7 +38,7 @@ _MATH_SYSTEM = """\
 You design math reasoning problems for an AI student. Each problem must:
 1. Be a self-contained math question in natural language
 2. Have a unique, deterministic numerical answer
-3. Come with a hidden Python verification function `def f(): return <answer>`
+3. Come with a hidden Python verification function `def f(): return <computation>`
 
 ### Problem Topics (vary across these):
 - Arithmetic: multi-step calculations, order of operations
@@ -55,6 +55,14 @@ You design math reasoning problems for an AI student. Each problem must:
 - The function must be deterministic and complete within 10 seconds
 - The answer should be a number (integer, fraction, or decimal)
 - Do NOT include the answer in the problem statement
+
+### CRITICAL — Verification Code Rules:
+- The code MUST COMPUTE the answer, NOT hardcode it
+- BAD:  `def f(): return 42` (just a constant — REJECTED)
+- GOOD: `def f(): return 2**10 + 3**5` (actual computation)
+- GOOD: `def f(): return math.gcd(84, 126)` (uses math functions)
+- GOOD: `def f():\n    total = sum(i**2 for i in range(1,11))\n    return total`
+- The code should mirror the mathematical reasoning needed to solve the problem
 
 ### Banned in verification code:
 {banned_keywords}
@@ -122,6 +130,37 @@ BANNED_KEYWORDS = [
     "threading", "datetime", "time", "hashlib", "hmac", "bcrypt",
     "os.sys", "os.path", "sys.exit", "os.environ", "calendar",
 ]
+
+
+def _is_hardcoded_constant(code: str) -> bool:
+    """Check if verification code just returns a literal constant.
+
+    Rejects: def f(): return 42
+    Accepts: def f(): return 2**10 + 3**5
+    Accepts: def f(): return math.gcd(84, 126)
+
+    Uses AST: if the return value is a Constant node, it's hardcoded.
+    """
+    import ast
+    try:
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "f":
+                # Find the return statement(s)
+                for child in ast.walk(node):
+                    if isinstance(child, ast.Return) and child.value is not None:
+                        # If return value is just a Constant (number/string), reject
+                        if isinstance(child.value, ast.Constant):
+                            return True
+                        # Also reject negative constants: return -42
+                        if (isinstance(child.value, ast.UnaryOp)
+                                and isinstance(child.value.op, ast.USub)
+                                and isinstance(child.value.operand, ast.Constant)):
+                            return True
+                        return False
+        return False
+    except SyntaxError:
+        return True
 
 
 class MathGenerator:
@@ -236,6 +275,10 @@ class MathGenerator:
                 n_dup += 1
                 continue
             seen.add(key)
+            # Reject hardcoded constants — code must COMPUTE the answer
+            if _is_hardcoded_constant(code):
+                n_val += 1
+                continue
             draft = {
                 "domain": "math",
                 "task_type": "math_o",

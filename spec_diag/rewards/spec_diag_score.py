@@ -47,6 +47,9 @@ def compute_score(
     if data_source == "spec_diag_math":
         return _score_math(ground_truth, solution_str)
 
+    if data_source == "math500":
+        return _score_math500(ground_truth, solution_str)
+
     if data_source != "spec_diag_code":
         # Fallback to verl's default behavior for other data sources.
         from verl.utils.reward_score import default_compute_score
@@ -97,6 +100,18 @@ def _score_math(ground_truth: Any, solution_str: str) -> float:
         response=solution_str,
     )
     return score
+
+
+# ---- MATH500 scoring ----
+
+
+def _score_math500(ground_truth: Any, solution_str: str) -> float:
+    """Score a MATH500 response: extract \\boxed{} + symbolic compare."""
+    if not isinstance(ground_truth, dict):
+        return 0.0
+    from spec_diag.rewards.math_grading import grade_math_answer
+    gold = ground_truth.get("answer", "")
+    return grade_math_answer(solution_str or "", gold)
 
 
 # ---- CRUXEval scoring ----

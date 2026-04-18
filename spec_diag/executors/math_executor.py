@@ -92,31 +92,14 @@ class MathExecutor:
     def eval_student(self, task: dict[str, Any], response: str) -> float:
         """Grade Student's math answer against gold.
 
-        Tries exact match after normalization, then numeric comparison.
+        Extracts \\boxed{} from CoT response, then normalizes and compares.
         """
         gold = task.get("gold_answer")
         if not isinstance(gold, str):
             return 0.0
-        student = (response or "").strip()
-        if not student:
-            return 0.0
-
-        gold_norm = _normalize_math_answer(gold)
-        student_norm = _normalize_math_answer(student)
-
-        if gold_norm == student_norm:
-            return 1.0
-
-        # Numeric comparison (handles "0.5" == "1/2", "3.0" == "3")
-        try:
-            gold_val = float(eval(gold_norm))
-            student_val = float(eval(student_norm))
-            if abs(gold_val - student_val) < 1e-6:
-                return 1.0
-        except Exception:
-            pass
-
-        return 0.0
+        from spec_diag.rewards.math_grading import extract_boxed_answer, grade_math_answer
+        # grade_math_answer handles boxed extraction + normalization + comparison
+        return grade_math_answer(response or "", gold)
 
     def close(self) -> None:
         self._pyexec.cleanup()

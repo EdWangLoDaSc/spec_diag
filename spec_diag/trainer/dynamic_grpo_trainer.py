@@ -73,12 +73,10 @@ _PROMPT_CODE_E = (
 
 
 _PROMPT_MATH_O = (
-    "Solve the following math problem. Give only the final numerical "
-    "answer, no explanation or working. If the answer is a fraction, "
-    "give it in simplest form (e.g., 3/4). If it is a decimal, give "
-    "the exact value.\n\n"
+    "Solve the following math problem step by step. Show your "
+    "reasoning, then put your final answer inside \\boxed{{}}.\n\n"
     "Problem: {problem}\n\n"
-    "Answer:"
+    "Solution:"
 )
 
 
