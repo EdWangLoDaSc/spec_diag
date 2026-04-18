@@ -168,9 +168,12 @@ LLM-generated tags suffer from fragmentation ("recursion" / "tree_recursion" / "
 | Data structures | `list`, `dict`, `set`, `string`, `tuple`, `stack_queue` |
 | Algorithms | `sorting`, `search`, `math`, `bitwise` |
 | Patterns | `comprehension`, `lambda`, `class`, `exception` |
-| Complexity | `short` (<10 lines), `medium` (10-30), `long` (>30) |
+| Size | `short` (<10 lines), `medium` (10-30), `long` (>30) |
+| Cyclomatic complexity | `cc_simple` (≤3), `cc_moderate` (4-8), `cc_complex` (>8) |
 
-The Generator is NOT asked to produce `capability_tags` — they are computed after validation from the code itself. Same code always produces the same tags. Combined with task-type prefixing (§5.1), the memory sees tags like `code_i:recursion`, `code_o:sorting`.
+Cyclomatic complexity counts decision points in the AST (if/for/while/except/and/or/assert/ternary). This decouples size from reasoning difficulty — a 5-line function with 3 nested conditionals is `short` + `cc_moderate`, not just "short".
+
+The Generator is NOT asked to produce `capability_tags` — they are computed after validation from the code itself. Same code always produces the same tags. Combined with task-type prefixing (§5.1), the memory sees tags like `code_i:recursion`, `code_o:cc_complex`.
 
 ### 4.4 Reference Snippets
 
@@ -219,20 +222,24 @@ compute_score()                       _FeederThread
 
 Tasks at both extremes of difficulty are automatically removed from the buffer:
 
-| Type | Condition | Threshold |
-|------|-----------|-----------|
-| **Mastered** (too easy) | All `n_rollouts` score 1.0 for 2 consecutive batches | `2 × n_rollouts` perfect streak |
-| **Impossible** (too hard) | All `n_rollouts` score 0.0 for 2 consecutive batches | `2 × n_rollouts` zero streak |
+| Type | Condition | Threshold | Min residence |
+|------|-----------|-----------|---------------|
+| **Mastered** (too easy) | All `n_rollouts` score 1.0 for 3 consecutive batches | `3 × n_rollouts` perfect streak | ≥ 16 training steps in buffer |
+| **Impossible** (too hard) | All `n_rollouts` score 0.0 for 2 consecutive batches | `2 × n_rollouts` zero streak | None |
+
+**Asymmetric design**: Mastered eviction is conservative (3 batches + residence requirement) because a task that seems easy early may become challenging after the student's distribution shifts. Impossible eviction is aggressive (2 batches, no residence) because GRPO's learnability mask (§6.6) already prevents gradient noise from these tasks — eviction just saves sampling cost.
+
+**Complementarity of Layer 1 and Layer 2**: A "borderline" task — all-wrong in batch 1, then 1/8 correct in batch 2 — is NOT evicted (streak reset), and Layer 2 masks batch 1 but lets batch 2 produce gradients. This is exactly the "critical difficulty" zone where learning happens most.
 
 **Mechanism**:
-1. `RewardTracker` maintains per-task `_task_perfect_streak` and `_task_zero_streak` — incremented on 1.0/0.0, reset on any other score.
-2. `get_mastered_keys(threshold=2)` / `get_impossible_keys(threshold=2)` return keys exceeding threshold × `n_rollouts`.
+1. `RewardTracker` maintains per-task `_task_perfect_streak`, `_task_zero_streak`, and `_task_first_seen_step`.
+2. `get_mastered_keys(threshold=3, min_residence_steps=16)` / `get_impossible_keys(threshold=2)` return eviction candidates.
 3. `DynamicDataset.evict_mastered(keys)` removes matching tasks.
 4. Feeder thread calls `_evict_outliers()` before each regeneration, then Generator fills the gaps.
 
 **Three layers of learnability control**:
 ```
-Layer 1: Buffer eviction     — remove tasks after 2 consecutive extreme batches
+Layer 1: Buffer eviction     — remove tasks after consecutive extreme batches
 Layer 2: GRPO learnability   — zero advantage for all-wrong groups (§6.6)
 Layer 3: Format reward       — penalize unstructured output (§6.5)
 ```
