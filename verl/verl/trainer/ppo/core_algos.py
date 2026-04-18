@@ -322,11 +322,12 @@ def compute_grpo_outcome_advantage(
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
 
-        # Learnability mask: zero out advantages for groups with no
-        # discriminative signal (all rollouts same score → std=0).
-        # These contribute only gradient noise, not useful learning signal.
+        # Learnability mask: zero out advantages for all-wrong groups
+        # (all rollouts score 0 → no useful signal, only gradient noise).
+        # All-correct groups already have advantage=0 naturally.
         uninformative_ids = {
-            idx for idx, std in id2std.items() if std < epsilon
+            idx for idx in id2score
+            if id2std[idx] < epsilon and id2mean[idx] < epsilon
         }
 
         for i in range(bsz):
@@ -364,8 +365,8 @@ def compute_grpo_vectorized_outcome_advantage(
             scalars = (scores - mean_g[g]) / (std_g[g] + epsilon)
         else:
             scalars = scores - mean_g[g]
-        # Learnability mask: zero out uninformative groups (std ≈ 0)
-        uninformative_mask = std_g[g] < epsilon
+        # Learnability mask: zero out all-wrong groups (std≈0 AND mean≈0)
+        uninformative_mask = (std_g[g] < epsilon) & (mean_g[g] < epsilon)
         scalars[uninformative_mask] = 0.0
         advantages = scalars.unsqueeze(-1) * response_mask
         return advantages, advantages
