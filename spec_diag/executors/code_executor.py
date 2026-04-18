@@ -145,16 +145,76 @@ class CodeExecutor(Executor):
 
     @staticmethod
     def _extract_answer(response: str) -> str:
-        """Extract answer from <answer>...</answer> tags in CoT response.
-        Falls back to raw response if no tags found."""
+        """Extract the final answer from a CoT response.
+
+        Tries multiple extraction strategies in order:
+        1. <answer>...</answer> tags (AZR standard)
+        2. \\boxed{...} (math convention)
+        3. ```output ... ``` or ```input ... ``` code blocks
+        4. ```python ... ``` code block (for code_f)
+        5. Last line heuristic (strip common prefixes)
+        6. Raw response (last resort)
+        """
         if not response:
             return ""
         import re
-        # Find last <answer>...</answer> block
-        matches = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
+
+        text = response.strip()
+
+        # 1. <answer>...</answer> — primary format
+        matches = re.findall(r"<answer>(.*?)</answer>", text, re.DOTALL)
         if matches:
             return matches[-1].strip()
-        return response.strip()
+
+        # 2. \boxed{...} — math convention
+        idx = text.rfind("\\boxed{")
+        if idx != -1:
+            depth = 0
+            start = idx + len("\\boxed{")
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    if depth == 0:
+                        return text[start:i].strip()
+                    depth -= 1
+
+        # 3. ```output ... ``` or ```input ... ``` blocks
+        out_match = re.findall(
+            r"```(?:output|input)\s*\n(.*?)```", text, re.DOTALL
+        )
+        if out_match:
+            return out_match[-1].strip()
+
+        # 4. ```python ... ``` block (for code_f function deduction)
+        py_match = re.findall(r"```python\s*\n(.*?)```", text, re.DOTALL)
+        if py_match:
+            return py_match[-1].strip()
+
+        # 5. Last line heuristic — strip common prefixes
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        if lines:
+            last = lines[-1]
+            for prefix in (
+                "Answer:", "The answer is", "Output:", "Result:",
+                "answer:", "output:", "result:", "Therefore,",
+                "So the answer is", "Final answer:",
+                "The output is", "The result is",
+            ):
+                if last.lower().startswith(prefix.lower()):
+                    candidate = last[len(prefix):].strip().rstrip(".")
+                    if candidate:
+                        return candidate
+
+        # 6. If response is short (< 50 chars), likely IS the answer
+        if len(text) < 50:
+            return text
+
+        # 7. Last non-empty line as final fallback
+        if lines:
+            return lines[-1]
+
+        return text
 
     # ---- student evaluation ----
 
