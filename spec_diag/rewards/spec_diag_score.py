@@ -56,6 +56,10 @@ def compute_score(
     executor = _get_executor()
     score = float(executor.eval_student(ground_truth, solution_str))
 
+    # Format reward: penalize responses without <answer> tags
+    # Encourages student to learn structured CoT → <answer>result</answer>
+    score = _apply_format_reward(score, solution_str)
+
     # Phase 1: report to RewardTracker (fire-and-forget)
     # Prefix tags with task_type so memory tracks per-type capability
     # e.g., ["sorting"] → ["code_o:sorting", "sorting"]
@@ -69,6 +73,28 @@ def compute_score(
         response=solution_str,
     )
     return score
+
+
+# ---- Format reward ----
+
+
+def _apply_format_reward(accuracy_score: float, response: str) -> float:
+    """Adjust reward based on whether the student used <answer> tags.
+
+    - Has <answer>...</answer>: full reward (student learned the format)
+    - No tags but answer extracted via fallback: reward * 0.5
+    - Empty / no response: -1.0
+
+    Teaches the student to produce structured CoT output.
+    """
+    if not response or not response.strip():
+        return -1.0
+    if "<answer>" in response and "</answer>" in response:
+        return accuracy_score
+    # No tags — penalize even if accuracy is correct
+    if accuracy_score > 0:
+        return accuracy_score * 0.5
+    return accuracy_score
 
 
 # ---- CRUXEval scoring ----
