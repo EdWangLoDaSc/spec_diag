@@ -141,6 +141,21 @@ class CodeExecutor(Executor):
             pairs.append({"input": inp, "output": output})
         return pairs
 
+    # ---- answer extraction ----
+
+    @staticmethod
+    def _extract_answer(response: str) -> str:
+        """Extract answer from <answer>...</answer> tags in CoT response.
+        Falls back to raw response if no tags found."""
+        if not response:
+            return ""
+        import re
+        # Find last <answer>...</answer> block
+        matches = re.findall(r"<answer>(.*?)</answer>", response, re.DOTALL)
+        if matches:
+            return matches[-1].strip()
+        return response.strip()
+
     # ---- student evaluation ----
 
     def eval_student(self, task: dict[str, Any], response: str) -> float:
@@ -163,7 +178,7 @@ class CodeExecutor(Executor):
         if not isinstance(code, str) or not isinstance(gold, str):
             return 0.0
         imports = task.get("imports") or []
-        agent_output = (response or "").strip()
+        agent_output = self._extract_answer(response)
         if not agent_output:
             return 0.0
         return float(
@@ -183,7 +198,7 @@ class CodeExecutor(Executor):
         if not isinstance(code, str) or not isinstance(gold_output, str):
             return 0.0
         imports = task.get("imports") or []
-        agent_input = (response or "").strip()
+        agent_input = self._extract_answer(response)
         if not agent_input:
             return 0.0
         return float(
@@ -201,8 +216,8 @@ class CodeExecutor(Executor):
         gold_error = task.get("error_type")
         if not isinstance(gold_error, str):
             return 0.0
-        # Extract first token from response (e.g., "ValueError: blah" → "ValueError")
-        agent_error = (response or "").strip().split()[0].split(":")[0] if response else ""
+        extracted = self._extract_answer(response)
+        agent_error = extracted.split()[0].split(":")[0] if extracted else ""
         if agent_error.lower() == gold_error.lower():
             return 1.0
         return 0.0
@@ -218,7 +233,7 @@ class CodeExecutor(Executor):
         io_pairs = task.get("io_pairs")
         if not io_pairs or not isinstance(io_pairs, list):
             return 0.0
-        student_code = (response or "").strip()
+        student_code = self._extract_answer(response)
         if not student_code:
             return 0.0
         # Strip markdown fences if present

@@ -21,20 +21,20 @@ logger = logging.getLogger(__name__)
 
 # Prompts matching the training prompts exactly (same as _PROMPT_CODE_O/I)
 _CRUX_PROMPT_O = (
-    "You are given a Python function and an input. Predict `repr(f(input))` "
-    "exactly. Respond with only the predicted repr string, no prose.\n\n"
+    "Given the following Code Snippet and the Input, think step by step "
+    "then deduce the output that will be produced from plugging the Input "
+    "into the Code Snippet. Put your final output in <answer> tags.\n\n"
     "```python\n{code}\n```\n"
-    "Input: `f({inputs})`\n"
-    "Answer:"
+    "```input\n{inputs}\n```"
 )
 
 _CRUX_PROMPT_I = (
-    "You are given a Python function and its output. Provide one possible "
-    "input that produces this output. Format: comma-separated positional "
-    "args (quote strings). Respond with only the input, no prose.\n\n"
+    "Given the following Code Snippet and the Output, think step by step "
+    "then provide one possible input that produced the output. Put your "
+    "final input in <answer> tags. Remember to add quotes around string "
+    "arguments. If multiple arguments, separate with commas.\n\n"
     "```python\n{code}\n```\n"
-    "Output: `{output}`\n"
-    "Input:"
+    "```output\n{output}\n```"
 )
 
 

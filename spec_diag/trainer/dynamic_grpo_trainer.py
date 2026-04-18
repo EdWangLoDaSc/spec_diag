@@ -45,41 +45,39 @@ logger = logging.getLogger(__name__)
 
 
 _PROMPT_CODE_O = (
-    "You are given a Python function and an input. Predict `repr(f(input))` "
-    "exactly. Respond with only the predicted repr string, no prose.\n\n"
+    "Given the following Code Snippet and the Input, think step by step "
+    "then deduce the output that will be produced from plugging the Input "
+    "into the Code Snippet. Put your final output in <answer> tags.\n\n"
     "```python\n{code}\n```\n"
-    "Input: `f({inputs})`\n"
-    "Answer:"
+    "```input\n{inputs}\n```"
 )
 
 _PROMPT_CODE_I = (
-    "You are given a Python function and its output. Provide one possible "
-    "input that produces this output. Format: comma-separated positional "
-    "args (quote strings). Respond with only the input, no prose.\n\n"
+    "Given the following Code Snippet and the Output, think step by step "
+    "then provide one possible input that produced the output. Put your "
+    "final input in <answer> tags. Remember to add quotes around string "
+    "arguments. If multiple arguments, separate with commas.\n\n"
     "```python\n{code}\n```\n"
-    "Output: `{gold_output}`\n"
-    "Input:"
+    "```output\n{gold_output}\n```"
 )
 
 _PROMPT_CODE_E = (
-    "You are given a Python function and an input. Deduce the error type "
-    "that will be raised when the code is executed with this input. If "
-    'there are no errors, answer "NoError". Respond with only the error '
-    "type name (e.g., ValueError, TypeError, NoError), no prose.\n\n"
+    "Given the following Code Snippet and the Input, think step by step "
+    "to deduce the error type that will be raised when the code is "
+    'executed. If there are no errors, put "NoError" in <answer> tags. '
+    "Put your final error type in <answer> tags.\n\n"
     "```python\n{code}\n```\n"
-    "Input: `f({inputs})`\n"
-    "Error type:"
+    "```input\n{inputs}\n```"
 )
 
 _PROMPT_CODE_F = (
-    "Given the following input/output pairs and a hint message, deduce "
-    "the Python function `def f(...)` that produces these outputs from "
-    "these inputs. Your function will be tested on HIDDEN inputs not shown "
-    "here, so it must generalize correctly. "
-    "Respond with only the function definition, no prose.\n\n"
+    "Given a set of input/output pairs and a message that describes the "
+    "function, think through the problem step by step to deduce a general "
+    "code snippet. This code should produce the hidden outputs from the "
+    "hidden inputs. Place your final answer inside <answer> tags as a "
+    "Python function.\n\n"
     "{io_pairs_text}\n"
-    "Hint: {message}\n\n"
-    "Write the function `def f(...)`:"
+    "Hint: {message}"
 )
 
 
