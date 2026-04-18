@@ -75,9 +75,9 @@ improve. Prioritize the weak areas while maintaining diversity. \
 Mix task types: roughly 40% code_o, 20% code_i, 20% code_e, 20% code_f.
 
 [Act]
-Output {n} tasks as a JSON list.
+Output {n} tasks as a JSON list. Do NOT include capability_tags (auto-generated).
 For code_o/code_i/code_e: {{"task_type": "...", "code": "def f(...): ...", \
-"inputs": "...", "capability_tags": [...]}}
+"inputs": "..."}}
 For code_f: {{"task_type": "code_f", "code": "def f(...): ...", \
-"inputs_list": ["...", ...], "message": "...", "capability_tags": [...]}}\
+"inputs_list": ["...", ...], "message": "..."}}\
 """

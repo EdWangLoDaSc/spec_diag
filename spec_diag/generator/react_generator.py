@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from spec_diag.executors.auto_tagger import auto_tag
 from spec_diag.executors.code_executor import CodeExecutor
 
 if TYPE_CHECKING:
@@ -111,13 +112,11 @@ For code_o, code_i, code_e, each element must have:
   "task_type": one of "code_o", "code_i", "code_e".
   "code": string. Python source defining `def f(...): ...`.
   "inputs": string. Python literal passed as positional args to f.
-  "capability_tags": list[string]. 1-3 tags like "recursion", "graph", \
-"dp", "string", "tree", "backtracking", "greedy", "stack".
 
 For code_f, each element must have:
   "task_type": "code_f".
   "code": string. The hidden gold function `def f(...)`.
-  "inputs_list": list[string]. 3-5 diverse inputs as Python literals.
+  "inputs_list": list[string]. 4-6 diverse inputs as Python literals.
   "message": string. A short hint describing what f does (without \
 revealing the implementation).
   "capability_tags": list[string]. 1-3 tags.
@@ -283,7 +282,7 @@ class ReActGenerator:
                     "code": code,
                     "inputs": inputs_list[0],
                     "imports": spec.get("imports") or [],
-                    "capability_tags": spec.get("capability_tags") or [],
+                    "capability_tags": auto_tag(code),
                     "message": message,
                 }
                 if not self._executor.check_validity(draft):
@@ -333,7 +332,7 @@ class ReActGenerator:
                 "code": code,
                 "inputs": inputs,
                 "imports": spec.get("imports") or [],
-                "capability_tags": spec.get("capability_tags") or [],
+                "capability_tags": auto_tag(code),
             }
             if not self._executor.check_validity(draft):
                 n_validity_fail += 1
