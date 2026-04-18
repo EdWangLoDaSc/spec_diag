@@ -134,6 +134,28 @@ class DynamicDatasetImpl:
                 "tag_counts": tag_counts,
             }
 
+    def evict_mastered(self, keys: list[tuple[str, str]]) -> int:
+        """Remove tasks whose (code[:100], inputs[:100]) key is in `keys`.
+
+        Returns the number of tasks evicted.
+        """
+        if not keys:
+            return 0
+        key_set = set(keys)
+        with self._lock:
+            before = len(self._tasks)
+            keep = []
+            keep_steps = []
+            for t, s in zip(self._tasks, self._steps):
+                code = t.get("code", "")[:100]
+                inputs = t.get("inputs", t.get("problem", ""))[:100]
+                if (code, inputs) not in key_set:
+                    keep.append(t)
+                    keep_steps.append(s)
+            self._tasks = keep
+            self._steps = keep_steps
+            return before - len(self._tasks)
+
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
             return deepcopy(self._tasks)

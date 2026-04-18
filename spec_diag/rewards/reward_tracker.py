@@ -34,6 +34,10 @@ class RewardTrackerImpl:
         self._failures: dict[str, list[dict[str, Any]]] = defaultdict(list)
         self._current_step: int = 0
         self._total_recorded: int = 0
+        # Per-task mastery tracking: key → consecutive perfect count
+        # key = (code[:100], inputs[:100]) or (code[:100], problem[:100])
+        self._task_perfect_streak: dict[tuple[str, str], int] = {}
+        self._mastered_keys: set[tuple[str, str]] = set()
 
     # ---- write path (called from compute_score) ----
 
@@ -72,6 +76,15 @@ class RewardTrackerImpl:
                     })
                     if len(failures) > self._max_failures:
                         del failures[: len(failures) - self._max_failures]
+            # Per-task mastery tracking
+            if task is not None:
+                task_key = _task_key(task)
+                if score >= 1.0:
+                    self._task_perfect_streak[task_key] = (
+                        self._task_perfect_streak.get(task_key, 0) + 1
+                    )
+                else:
+                    self._task_perfect_streak[task_key] = 0
             self._total_recorded += 1
 
     # ---- read path (called from feeder thread) ----
@@ -114,6 +127,22 @@ class RewardTrackerImpl:
             self._total_recorded = 0
             self._current_step = 0
 
+    def get_mastered_keys(self, threshold: int = 3) -> list[tuple[str, str]]:
+        """Return task keys that have been scored 1.0 at least `threshold`
+        consecutive times (across rollouts). These tasks are "mastered"
+        and can be evicted from the buffer.
+
+        With GRPO n=8, each training step produces 8 record() calls per task.
+        threshold=3 means 3×8=24 consecutive perfect scores.
+        """
+        with self._lock:
+            mastered = [
+                k for k, count in self._task_perfect_streak.items()
+                if count >= threshold * 8  # 8 rollouts per step
+            ]
+            self._mastered_keys.update(mastered)
+            return mastered
+
     def stats(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -121,6 +150,8 @@ class RewardTrackerImpl:
                 "current_step": self._current_step,
                 "n_tags": len(self._scores),
                 "tags": list(self._scores.keys()),
+                "n_mastered": len(self._mastered_keys),
+                "n_tracked_tasks": len(self._task_perfect_streak),
             }
 
 
@@ -138,6 +169,13 @@ class RewardTracker(RewardTrackerImpl):
 
 
 # ---- helpers ----
+
+def _task_key(task: dict[str, Any]) -> tuple[str, str]:
+    """Compute a stable key for a task dict (for mastery tracking)."""
+    code = task.get("code", "")[:100]
+    inputs = task.get("inputs", task.get("problem", ""))[:100]
+    return (code, inputs)
+
 
 def _normalize_tag(tag: str) -> str:
     """Normalize capability tags to reduce fragmentation.

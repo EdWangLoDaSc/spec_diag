@@ -382,6 +382,27 @@ class _FeederThread(threading.Thread):
         except Exception:
             logger.exception("spec_diag feeder: failed to save tasks to %s", out)
 
+    def _evict_mastered(self) -> None:
+        """Remove tasks the student has mastered (3 consecutive all-correct)."""
+        if self._reward_tracker is None:
+            return
+        import ray
+        try:
+            mastered = ray.get(
+                self._reward_tracker.get_mastered_keys.remote(threshold=3)
+            )
+            if mastered:
+                n_evicted = ray.get(
+                    self._handle.evict_mastered.remote(mastered)
+                )
+                if n_evicted > 0:
+                    logger.info(
+                        "spec_diag feeder: evicted %d mastered tasks "
+                        "(%d keys)", n_evicted, len(mastered),
+                    )
+        except Exception:
+            logger.exception("spec_diag feeder: evict_mastered failed")
+
     def _update_memory(self, step: int) -> bool:
         """Query RewardTracker → update memory.  Returns True if memory was updated."""
         if self._reward_tracker is None or self._memory is None:
@@ -456,6 +477,9 @@ class _FeederThread(threading.Thread):
                 )
 
                 if need_generate:
+                    # Evict mastered tasks (3 consecutive perfect batches)
+                    self._evict_mastered()
+
                     # Phase 1: try memory-conditioned generation
                     use_memory = self._update_memory(step)
 
