@@ -383,15 +383,17 @@ class _FeederThread(threading.Thread):
     def _evict_outliers(self) -> None:
         """Remove tasks that are too easy (mastered) or too hard (impossible).
 
-        Mastered: 2 consecutive batches where all n_rollouts score 1.0
-        Impossible: 2 consecutive batches where all n_rollouts score 0.0
+        Mastered: 3 consecutive batches all-correct + min 16 steps in buffer
+        Impossible: 2 consecutive batches all-wrong (no min residence)
         """
         if self._reward_tracker is None:
             return
         import ray
         try:
             mastered = ray.get(
-                self._reward_tracker.get_mastered_keys.remote(threshold=2)
+                self._reward_tracker.get_mastered_keys.remote(
+                    threshold=3, min_residence_steps=16,
+                )
             )
             impossible = ray.get(
                 self._reward_tracker.get_impossible_keys.remote(threshold=2)

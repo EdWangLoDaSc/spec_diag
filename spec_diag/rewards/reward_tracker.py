@@ -40,6 +40,7 @@ class RewardTrackerImpl:
         # key = (code[:100], inputs[:100]) or (code[:100], problem[:100])
         self._task_perfect_streak: dict[tuple[str, str], int] = {}  # all-correct streak
         self._task_zero_streak: dict[tuple[str, str], int] = {}     # all-wrong streak
+        self._task_first_seen_step: dict[tuple[str, str], int] = {} # when task was first scored
         self._evicted_keys: set[tuple[str, str]] = set()
 
     # ---- write path (called from compute_score) ----
@@ -82,6 +83,8 @@ class RewardTrackerImpl:
             # Per-task eviction tracking (mastered + impossible)
             if task is not None:
                 task_key = _task_key(task)
+                if task_key not in self._task_first_seen_step:
+                    self._task_first_seen_step[task_key] = step
                 if score >= 1.0:
                     self._task_perfect_streak[task_key] = (
                         self._task_perfect_streak.get(task_key, 0) + 1
@@ -137,17 +140,26 @@ class RewardTrackerImpl:
             self._total_recorded = 0
             self._current_step = 0
 
-    def get_mastered_keys(self, threshold: int = 2) -> list[tuple[str, str]]:
+    def get_mastered_keys(
+        self, threshold: int = 3, min_residence_steps: int = 16,
+    ) -> list[tuple[str, str]]:
         """Return task keys scored 1.0 for `threshold` consecutive batches.
 
         Each batch produces n_rollouts record() calls per task.
-        threshold=2 means 2 × n_rollouts consecutive perfect scores.
+        threshold=3 means 3 × n_rollouts consecutive perfect scores.
+
+        Also requires the task to have been in the buffer for at least
+        `min_residence_steps` training steps — prevents evicting tasks
+        that happened to be easy at the start but haven't been tested
+        after the student improved.
         """
         with self._lock:
             min_streak = threshold * self._n_rollouts
+            step = self._current_step
             mastered = [
                 k for k, count in self._task_perfect_streak.items()
                 if count >= min_streak
+                and (step - self._task_first_seen_step.get(k, 0)) >= min_residence_steps
             ]
             self._evicted_keys.update(mastered)
             return mastered

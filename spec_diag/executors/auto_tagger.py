@@ -39,7 +39,39 @@ def auto_tag(code: str) -> list[str]:
     else:
         tags.add("long")
 
+    # Cyclomatic complexity (number of decision points + 1)
+    cc = _cyclomatic_complexity(tree)
+    if cc <= 3:
+        tags.add("cc_simple")
+    elif cc <= 8:
+        tags.add("cc_moderate")
+    else:
+        tags.add("cc_complex")
+
     return sorted(tags)
+
+
+def _cyclomatic_complexity(tree: ast.AST) -> int:
+    """Compute cyclomatic complexity from AST (no external deps).
+
+    CC = 1 + number of decision points (if/elif/for/while/and/or/
+    except/with/assert/ternary).
+    """
+    cc = 1
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.IfExp)):  # if / ternary
+            cc += 1
+        elif isinstance(node, (ast.For, ast.While)):  # loops
+            cc += 1
+        elif isinstance(node, ast.ExceptHandler):  # except clauses
+            cc += 1
+        elif isinstance(node, ast.With):
+            cc += 1
+        elif isinstance(node, ast.Assert):
+            cc += 1
+        elif isinstance(node, ast.BoolOp):  # and/or
+            cc += len(node.values) - 1
+    return cc
 
 
 class _TagVisitor(ast.NodeVisitor):
