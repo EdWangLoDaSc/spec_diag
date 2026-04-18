@@ -196,6 +196,7 @@ compute_score()                       _FeederThread
 
 **Design decisions**:
 - **Fire-and-forget**: `record.remote()` never calls `ray.get()` — reward computation is never blocked.
+- **Task-type-prefixed tags**: Tags are reported with both prefixed and raw forms (e.g., `["sorting"]` → `["code_i:sorting", "sorting"]`). This lets memory track per-task-type pass rates, so the Generator can see "code_i:sorting is weak" and automatically increase code_i output without hardcoded quotas.
 - **Retry on lookup failure**: Up to 20 retries if `ray.get_actor()` fails (actor may not be created yet at startup).
 - **Memory cap**: Max 2000 scores per tag to prevent unbounded growth.
 - **Tag normalization**: Applied at record time to reduce fragmentation.
@@ -232,6 +233,7 @@ class GeneratorMemory:
 - Caps at 30 tags sorted by pass rate
 - Computes `overall_pass_rate` and `difficulty_hint`
 - Classifies tags as weak (< 50%) or strong (> 80%)
+- Tags include task-type prefixes (e.g., `code_i:sorting`, `code_o:sorting`), enabling the Generator to see which *task type × capability* combinations are weak and adjust output accordingly — this replaces hardcoded task-type quotas with organic feedback-driven balancing
 
 ### 5.4 Student Profiler
 
