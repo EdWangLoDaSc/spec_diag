@@ -321,8 +321,18 @@ def compute_grpo_outcome_advantage(
                 id2std[idx] = torch.std(scores_tensor)
             else:
                 raise ValueError(f"no score in prompt index: {idx}")
+
+        # Learnability mask: zero out advantages for groups with no
+        # discriminative signal (all rollouts same score → std=0).
+        # These contribute only gradient noise, not useful learning signal.
+        uninformative_ids = {
+            idx for idx, std in id2std.items() if std < epsilon
+        }
+
         for i in range(bsz):
-            if norm_adv_by_std_in_grpo:
+            if index[i] in uninformative_ids:
+                scores[i] = 0.0
+            elif norm_adv_by_std_in_grpo:
                 scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + epsilon)
             else:
                 scores[i] = scores[i] - id2mean[index[i]]
@@ -354,6 +364,9 @@ def compute_grpo_vectorized_outcome_advantage(
             scalars = (scores - mean_g[g]) / (std_g[g] + epsilon)
         else:
             scalars = scores - mean_g[g]
+        # Learnability mask: zero out uninformative groups (std ≈ 0)
+        uninformative_mask = std_g[g] < epsilon
+        scalars[uninformative_mask] = 0.0
         advantages = scalars.unsqueeze(-1) * response_mask
         return advantages, advantages
 
