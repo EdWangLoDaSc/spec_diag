@@ -36,10 +36,11 @@ class RewardTrackerImpl:
         self._current_step: int = 0
         self._total_recorded: int = 0
         self._n_rollouts: int = int(n_rollouts)
-        # Per-task mastery tracking: key → consecutive perfect count
+        # Per-task eviction tracking: key → consecutive streak count
         # key = (code[:100], inputs[:100]) or (code[:100], problem[:100])
-        self._task_perfect_streak: dict[tuple[str, str], int] = {}
-        self._mastered_keys: set[tuple[str, str]] = set()
+        self._task_perfect_streak: dict[tuple[str, str], int] = {}  # all-correct streak
+        self._task_zero_streak: dict[tuple[str, str], int] = {}     # all-wrong streak
+        self._evicted_keys: set[tuple[str, str]] = set()
 
     # ---- write path (called from compute_score) ----
 
@@ -78,15 +79,22 @@ class RewardTrackerImpl:
                     })
                     if len(failures) > self._max_failures:
                         del failures[: len(failures) - self._max_failures]
-            # Per-task mastery tracking
+            # Per-task eviction tracking (mastered + impossible)
             if task is not None:
                 task_key = _task_key(task)
                 if score >= 1.0:
                     self._task_perfect_streak[task_key] = (
                         self._task_perfect_streak.get(task_key, 0) + 1
                     )
+                    self._task_zero_streak[task_key] = 0
+                elif score <= 0.0:
+                    self._task_zero_streak[task_key] = (
+                        self._task_zero_streak.get(task_key, 0) + 1
+                    )
+                    self._task_perfect_streak[task_key] = 0
                 else:
                     self._task_perfect_streak[task_key] = 0
+                    self._task_zero_streak[task_key] = 0
             self._total_recorded += 1
 
     # ---- read path (called from feeder thread) ----
@@ -129,13 +137,11 @@ class RewardTrackerImpl:
             self._total_recorded = 0
             self._current_step = 0
 
-    def get_mastered_keys(self, threshold: int = 3) -> list[tuple[str, str]]:
-        """Return task keys that have been scored 1.0 at least `threshold`
-        consecutive times (across rollouts). These tasks are "mastered"
-        and can be evicted from the buffer.
+    def get_mastered_keys(self, threshold: int = 2) -> list[tuple[str, str]]:
+        """Return task keys scored 1.0 for `threshold` consecutive batches.
 
-        Each training step produces n_rollouts record() calls per task.
-        threshold=3 means 3 × n_rollouts consecutive perfect scores.
+        Each batch produces n_rollouts record() calls per task.
+        threshold=2 means 2 × n_rollouts consecutive perfect scores.
         """
         with self._lock:
             min_streak = threshold * self._n_rollouts
@@ -143,8 +149,23 @@ class RewardTrackerImpl:
                 k for k, count in self._task_perfect_streak.items()
                 if count >= min_streak
             ]
-            self._mastered_keys.update(mastered)
+            self._evicted_keys.update(mastered)
             return mastered
+
+    def get_impossible_keys(self, threshold: int = 2) -> list[tuple[str, str]]:
+        """Return task keys scored 0.0 for `threshold` consecutive batches.
+
+        These tasks are too hard — the student never gets any rollout
+        correct, so GRPO gets no useful gradient signal.
+        """
+        with self._lock:
+            min_streak = threshold * self._n_rollouts
+            impossible = [
+                k for k, count in self._task_zero_streak.items()
+                if count >= min_streak
+            ]
+            self._evicted_keys.update(impossible)
+            return impossible
 
     def stats(self) -> dict[str, Any]:
         with self._lock:
@@ -153,7 +174,7 @@ class RewardTrackerImpl:
                 "current_step": self._current_step,
                 "n_tags": len(self._scores),
                 "tags": list(self._scores.keys()),
-                "n_mastered": len(self._mastered_keys),
+                "n_evicted": len(self._evicted_keys),
                 "n_tracked_tasks": len(self._task_perfect_streak),
             }
 

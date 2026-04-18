@@ -382,26 +382,35 @@ class _FeederThread(threading.Thread):
         except Exception:
             logger.exception("spec_diag feeder: failed to save tasks to %s", out)
 
-    def _evict_mastered(self) -> None:
-        """Remove tasks the student has mastered (3 consecutive all-correct)."""
+    def _evict_outliers(self) -> None:
+        """Remove tasks that are too easy (mastered) or too hard (impossible).
+
+        Mastered: 2 consecutive batches where all n_rollouts score 1.0
+        Impossible: 2 consecutive batches where all n_rollouts score 0.0
+        """
         if self._reward_tracker is None:
             return
         import ray
         try:
             mastered = ray.get(
-                self._reward_tracker.get_mastered_keys.remote(threshold=3)
+                self._reward_tracker.get_mastered_keys.remote(threshold=2)
             )
-            if mastered:
+            impossible = ray.get(
+                self._reward_tracker.get_impossible_keys.remote(threshold=2)
+            )
+            to_evict = list(set(mastered + impossible))
+            if to_evict:
                 n_evicted = ray.get(
-                    self._handle.evict_mastered.remote(mastered)
+                    self._handle.evict_mastered.remote(to_evict)
                 )
                 if n_evicted > 0:
                     logger.info(
-                        "spec_diag feeder: evicted %d mastered tasks "
-                        "(%d keys)", n_evicted, len(mastered),
+                        "spec_diag feeder: evicted %d tasks "
+                        "(mastered=%d, impossible=%d)",
+                        n_evicted, len(mastered), len(impossible),
                     )
         except Exception:
-            logger.exception("spec_diag feeder: evict_mastered failed")
+            logger.exception("spec_diag feeder: evict_outliers failed")
 
     def _update_memory(self, step: int) -> bool:
         """Query RewardTracker → update memory.  Returns True if memory was updated."""
@@ -477,8 +486,8 @@ class _FeederThread(threading.Thread):
                 )
 
                 if need_generate:
-                    # Evict mastered tasks (3 consecutive perfect batches)
-                    self._evict_mastered()
+                    # Evict mastered (too easy) and impossible (too hard) tasks
+                    self._evict_outliers()
 
                     # Phase 1: try memory-conditioned generation
                     use_memory = self._update_memory(step)
