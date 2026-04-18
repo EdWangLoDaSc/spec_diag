@@ -156,8 +156,21 @@ Every generated task passes through:
 | code_e: must error | Reject `error_type == "NoError"` | `gold_fail` |
 | code_i: non-trivial | Reject `gold_output == "None"` | `gold_fail` |
 | math_o: no hardcoding | AST check rejects `def f(): return 42` (constant) | `validity_fail` |
+| Auto-tagging | Replace LLM tags with AST-derived tags | — |
 
-**Tag normalization**: Tags are lowercased and whitespace/hyphens replaced with underscores to prevent fragmentation (e.g., `"error handling"` → `"error_handling"`).
+### 4.4 AST-Based Auto-Tagging
+
+LLM-generated tags suffer from fragmentation ("recursion" / "tree_recursion" / "recursive_traversal" → 3 tags for the same capability). Instead, `auto_tag(code)` extracts tags deterministically from the AST:
+
+| Category | Tags |
+|----------|------|
+| Control flow | `recursion`, `loop`, `nested_loop`, `conditional` |
+| Data structures | `list`, `dict`, `set`, `string`, `tuple`, `stack_queue` |
+| Algorithms | `sorting`, `search`, `math`, `bitwise` |
+| Patterns | `comprehension`, `lambda`, `class`, `exception` |
+| Complexity | `short` (<10 lines), `medium` (10-30), `long` (>30) |
+
+The Generator is NOT asked to produce `capability_tags` — they are computed after validation from the code itself. Same code always produces the same tags. Combined with task-type prefixing (§5.1), the memory sees tags like `code_i:recursion`, `code_o:sorting`.
 
 ### 4.4 Reference Snippets
 
@@ -202,17 +215,29 @@ compute_score()                       _FeederThread
 - **Tag normalization**: Applied at record time to reduce fragmentation.
 - **n_rollouts**: Read from `config.actor_rollout_ref.rollout.n` (not hardcoded).
 
-### 5.2 Mastered Task Eviction
+### 5.2 Task Eviction (Zone of Proximal Development)
 
-Tasks the student has fully learned are automatically removed from the buffer:
+Tasks at both extremes of difficulty are automatically removed from the buffer:
 
-1. **Tracking**: `RewardTracker` maintains `_task_perfect_streak[key]` — incremented on `score=1.0`, reset on `score<1.0`.
-2. **Detection**: `get_mastered_keys(threshold=3)` returns task keys where streak ≥ `3 × n_rollouts` (e.g., 3 batches × 8 rollouts = 24 consecutive perfect scores).
-3. **Eviction**: `DynamicDataset.evict_mastered(keys)` removes matching tasks by `(code[:100], inputs[:100])` key.
-4. **Timing**: Feeder thread calls `_evict_mastered()` before each regeneration cycle.
-5. **Replacement**: Generator produces new tasks to fill the gaps.
+| Type | Condition | Threshold |
+|------|-----------|-----------|
+| **Mastered** (too easy) | All `n_rollouts` score 1.0 for 2 consecutive batches | `2 × n_rollouts` perfect streak |
+| **Impossible** (too hard) | All `n_rollouts` score 0.0 for 2 consecutive batches | `2 × n_rollouts` zero streak |
 
-**Effect**: The buffer naturally shifts toward tasks the student hasn't mastered, keeping the curriculum in the zone of proximal development.
+**Mechanism**:
+1. `RewardTracker` maintains per-task `_task_perfect_streak` and `_task_zero_streak` — incremented on 1.0/0.0, reset on any other score.
+2. `get_mastered_keys(threshold=2)` / `get_impossible_keys(threshold=2)` return keys exceeding threshold × `n_rollouts`.
+3. `DynamicDataset.evict_mastered(keys)` removes matching tasks.
+4. Feeder thread calls `_evict_outliers()` before each regeneration, then Generator fills the gaps.
+
+**Three layers of learnability control**:
+```
+Layer 1: Buffer eviction     — remove tasks after 2 consecutive extreme batches
+Layer 2: GRPO learnability   — zero advantage for all-wrong groups (§6.6)
+Layer 3: Format reward       — penalize unstructured output (§6.5)
+```
+
+**Effect**: The buffer naturally converges to tasks in the zone of proximal development (mixed correctness, useful gradient signal).
 
 ### 5.3 GeneratorMemory
 
@@ -327,18 +352,58 @@ Standard verl GRPO with these overrides:
 | `max_prompt_length` | 1024 | |
 | `max_response_length` | 512 | |
 
-### 6.4 Reward Function
+### 6.4 Student Prompts (CoT + `<answer>` Tags)
+
+Student prompts follow AZR's "think step by step" convention. The student produces chain-of-thought reasoning followed by a structured answer tag:
+
+```
+Given the Code Snippet and Input, think step by step then deduce the output.
+Put your final output in <answer> tags.
+```
+
+**Answer extraction** (`_extract_answer`) uses 7 fallback strategies:
+
+| Priority | Strategy | Example |
+|----------|----------|---------|
+| 1 | `<answer>...</answer>` | `"Let me think...<answer>[1,2,3]</answer>"` |
+| 2 | `\boxed{...}` | `"Therefore \boxed{42}"` |
+| 3 | `` ```output/input``` `` block | `` "```output\n[1,2,3]\n```" `` |
+| 4 | `` ```python``` `` block | For code_f function deduction |
+| 5 | Last line prefix strip | `"Answer: 42"`, `"The answer is 5"` |
+| 6 | Short response passthrough | `"42"` (< 50 chars, likely IS the answer) |
+| 7 | Last non-empty line | Final fallback for long CoT |
+
+### 6.5 Reward Function
 
 `compute_score(data_source, solution_str, ground_truth)` routes by `data_source`:
 
 | data_source | Evaluation | Score |
 |-------------|-----------|-------|
-| `spec_diag_code` | `CodeExecutor.eval_student()` → routes by `task_type` | 0.0 or 1.0 |
+| `spec_diag_code` | `CodeExecutor.eval_student()` → extract `<answer>` → routes by `task_type` | 0.0 or 1.0 |
 | `spec_diag_math` | `MathExecutor.eval_student()` → `\boxed{}` extraction + normalization | 0.0 or 1.0 |
 | `cruxeval_o` | `eval_output_prediction()` | 0.0 or 1.0 |
 | `cruxeval_i` | `eval_input_prediction()` | 0.0 or 1.0 |
 | `math500` | `grade_math_answer()` — LaTeX normalization + symbolic compare | 0.0 or 1.0 |
 | `humaneval` | evalplus `check_correctness()` | 0.0 or 1.0 |
+
+**Format reward**: After accuracy scoring, a format penalty is applied:
+- Has `<answer>...</answer>` tags → full reward (student learned the format)
+- No tags but answer extracted via fallback → reward × 0.5
+- Empty response → -1.0
+
+This teaches the student to produce structured output over time.
+
+### 6.6 Learnability Filter (GRPO Advantage Masking)
+
+In GRPO, each prompt gets `n` rollouts. When ALL rollouts score 0.0 (all-wrong group), the advantage is mathematically 0 but numerically noisy (`0 / epsilon`). This wastes gradient updates.
+
+**Fix**: In `compute_grpo_outcome_advantage`, groups where `std < epsilon AND mean < epsilon` (all-wrong) have their advantages explicitly zeroed. Applied to both loop and vectorized GRPO variants.
+
+```
+All-wrong group  (std=0, mean=0): advantage = 0  → masked, no gradient noise
+All-correct group (std=0, mean=1): advantage = 0  → naturally zero, no mask needed
+Mixed group       (std>0):         advantage = (r-mean)/std → normal GRPO
+```
 
 The `CodeExecutor` and `MathExecutor` are module-level singletons to avoid creating/destroying `ProcessPool` on every call.
 
@@ -572,7 +637,7 @@ trainer:
 | Branch | Content |
 |--------|---------|
 | `main` | Code domain: code_o, code_i, code_e + CRUXEval eval |
-| `feat/code-f-task-type` | + code_f (function deduction) + mastered task eviction |
+| `feat/code-f-task-type` | + code_f + task eviction + learnability mask + CoT prompts + format reward + auto-tagging |
 | `feat/math-tasks` | + Math domain: math_o + MATH500 eval + CoT + anti-hardcoding |
 
 ---
@@ -601,15 +666,16 @@ spec_diag/
 │   │   ├── student_profiler.py    # LLM-based diagnosis
 │   │   └── prompts/__init__.py    # ReAct prompt templates (code)
 │   ├── executors/
-│   │   ├── code_executor.py       # Code: eval routing + gold answer computation
+│   │   ├── code_executor.py       # Code: eval routing + <answer> extraction + gold answer
 │   │   ├── math_executor.py       # Math: eval + gold answer + anti-hardcoding
+│   │   ├── auto_tagger.py         # AST-based capability tag extraction (~20 fixed tags)
 │   │   ├── python_executor.py     # AZR PythonExecutor (pebble ProcessPool)
 │   │   ├── templates.py           # execution templates
 │   │   ├── checks.py              # banned keyword AST check
 │   │   └── parsers.py             # error type extraction
 │   ├── rewards/
-│   │   ├── spec_diag_score.py     # compute_score (verl reward function, routes all domains)
-│   │   ├── reward_tracker.py      # RewardTracker named Ray actor + mastery tracking
+│   │   ├── spec_diag_score.py     # compute_score + format reward (routes all domains)
+│   │   ├── reward_tracker.py      # RewardTracker + mastery/impossible tracking
 │   │   └── math_grading.py        # \boxed{} extraction + LaTeX normalization
 │   ├── dataset/
 │   │   └── dynamic_dataset.py     # DynamicDataset Ray actor (buffer + eviction)
