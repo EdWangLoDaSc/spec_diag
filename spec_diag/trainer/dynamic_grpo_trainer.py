@@ -380,49 +380,6 @@ class _FeederThread(threading.Thread):
         except Exception:
             logger.exception("spec_diag feeder: failed to save tasks to %s", out)
 
-    def _filter_extremes(self, tasks: list[dict]) -> list[dict]:
-        """Pre-filter tasks before adding to buffer (non_extremes strategy).
-
-        Uses RewardTracker's per-tag pass rates to predict whether a task
-        is likely too easy (all tags >90%) or too hard (all tags <10%).
-        These would produce uninformative rollouts (all-correct or all-wrong),
-        so we drop them before they enter the buffer.
-
-        Tasks with unknown tags (not yet tracked) always pass through.
-        """
-        if self._reward_tracker is None or self._memory is None:
-            return tasks
-        cap_summary = {}
-        for entry in (self._memory.task_history or []):
-            for tag, rate in entry.get("per_tag_pass_rates", {}).items():
-                cap_summary[tag] = rate  # latest rate wins
-
-        if not cap_summary:
-            return tasks  # no data yet, let everything through
-
-        from spec_diag.rewards.reward_tracker import _normalize_tag
-
-        filtered = []
-        n_dropped = 0
-        for task in tasks:
-            raw_tags = task.get("capability_tags") or []
-            tags = [_normalize_tag(t) for t in raw_tags]
-            known_rates = [cap_summary[t] for t in tags if t in cap_summary]
-
-            if known_rates:
-                avg_rate = sum(known_rates) / len(known_rates)
-                if avg_rate > 0.9 or avg_rate < 0.1:
-                    n_dropped += 1
-                    continue
-            filtered.append(task)
-
-        if n_dropped > 0:
-            logger.info(
-                "spec_diag feeder: filtered %d extreme tasks "
-                "(too easy/hard by tag pass rate)", n_dropped,
-            )
-        return filtered
-
     def _evict_outliers(self) -> None:
         """Remove tasks that are too easy (mastered) or too hard (impossible).
 
@@ -541,10 +498,6 @@ class _FeederThread(threading.Thread):
                         tasks = self._generator.cold_start(self._feed_batch)
 
                     if tasks:
-                        # Filter non_extremes: drop tasks whose tags are
-                        # all >90% or all <10% pass rate (too easy/hard)
-                        tasks = self._filter_extremes(tasks)
-
                         ray.get(
                             self._handle.add_batch.remote(tasks, step)
                         )
