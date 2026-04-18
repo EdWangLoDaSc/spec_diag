@@ -1,0 +1,19 @@
+# Math Generator config (independent from code generator)
+# Uses the same vLLM endpoint but separate prompts, seeds, and task types.
+
+model:
+  name: "Qwen/Qwen3-8B"
+  backend: "vllm"
+  temperature: 0.7
+  max_tokens: 4096
+  seed_data_path: data/math_seeds.jsonl  # 20 reference problems
+  n_references: 4
+  tasks_per_call: 4
+  max_generation_workers: 8
+
+react:
+  failure_samples_per_tag: 3
+  regenerate_every_steps: 8
+
+memory:
+  profile_refresh_every: 4

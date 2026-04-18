@@ -44,6 +44,9 @@ def compute_score(
     if data_source in ("cruxeval_o", "cruxeval_i"):
         return _score_cruxeval(ground_truth, solution_str)
 
+    if data_source == "spec_diag_math":
+        return _score_math(ground_truth, solution_str)
+
     if data_source != "spec_diag_code":
         # Fallback to verl's default behavior for other data sources.
         from verl.utils.reward_score import default_compute_score
@@ -57,6 +60,36 @@ def compute_score(
     score = float(executor.eval_student(ground_truth, solution_str))
 
     # Phase 1: report to RewardTracker (fire-and-forget)
+    _try_report(
+        tags=ground_truth.get("capability_tags") or [],
+        score=score,
+        task=ground_truth,
+        response=solution_str,
+    )
+    return score
+
+
+# ---- Math scoring ----
+
+_math_executor = None
+
+
+def _get_math_executor():
+    global _math_executor
+    if _math_executor is None:
+        with _executor_lock:
+            if _math_executor is None:
+                from spec_diag.executors.math_executor import MathExecutor
+                _math_executor = MathExecutor(timeout_length=10, max_workers=2, ast_check=True)
+    return _math_executor
+
+
+def _score_math(ground_truth: Any, solution_str: str) -> float:
+    """Score a math response using MathExecutor."""
+    if not isinstance(ground_truth, dict):
+        return 0.0
+    executor = _get_math_executor()
+    score = float(executor.eval_student(ground_truth, solution_str))
     _try_report(
         tags=ground_truth.get("capability_tags") or [],
         score=score,

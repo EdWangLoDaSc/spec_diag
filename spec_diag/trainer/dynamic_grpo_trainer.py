@@ -72,6 +72,16 @@ _PROMPT_CODE_E = (
 )
 
 
+_PROMPT_MATH_O = (
+    "Solve the following math problem. Give only the final numerical "
+    "answer, no explanation or working. If the answer is a fraction, "
+    "give it in simplest form (e.g., 3/4). If it is a decimal, give "
+    "the exact value.\n\n"
+    "Problem: {problem}\n\n"
+    "Answer:"
+)
+
+
 def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
     """Convert a spec_diag task dict into a verl-compatible dataset row.
 
@@ -79,13 +89,16 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
     schema. Tokenization is deferred to verl's AgentLoop downstream; we only
     produce the chat-format messages list.
 
-    Supports task_type: "code_o" (output prediction, default),
-    "code_i" (input prediction), "code_e" (error prediction).
+    Supports task_type: "code_o", "code_i", "code_e", "math_o".
     """
     import torch
 
     task_type = task.get("task_type", "code_o")
-    if task_type == "code_i":
+    domain = task.get("domain", "code")
+
+    if task_type == "math_o":
+        content = _PROMPT_MATH_O.format(problem=task.get("problem", ""))
+    elif task_type == "code_i":
         content = _PROMPT_CODE_I.format(
             code=task.get("code", ""),
             gold_output=task.get("gold_output", ""),
@@ -101,11 +114,12 @@ def _task_to_sample(task: dict[str, Any], index: int = 0) -> dict[str, Any]:
             inputs=task.get("inputs", ""),
         )
 
+    data_source = "spec_diag_math" if domain == "math" else "spec_diag_code"
     messages = [{"role": "user", "content": content}]
     return {
         "prompt": messages,
         "raw_prompt": messages,
-        "data_source": "spec_diag_code",
+        "data_source": data_source,
         "reward_model": {"style": "rule", "ground_truth": task},
         "spec_diag_task": task,
         # Required by verl's collate / downstream; mirror RLHFDataset fields:

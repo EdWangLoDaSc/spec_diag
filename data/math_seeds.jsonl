@@ -1,0 +1,20 @@
+{"problem": "What is the sum of all prime numbers less than 20?", "code": "def f(): return 2+3+5+7+11+13+17+19", "gold_answer": "77", "capability_tags": ["number_theory"]}
+{"problem": "A rectangle has a length of 12 cm and a width of 8 cm. What is the length of its diagonal in cm?", "code": "import math\ndef f(): return math.sqrt(12**2 + 8**2)", "gold_answer": "14.422205101855956", "capability_tags": ["geometry"]}
+{"problem": "How many ways can you choose 3 items from a set of 10 distinct items?", "code": "import math\ndef f(): return math.comb(10, 3)", "gold_answer": "120", "capability_tags": ["combinatorics"]}
+{"problem": "What is 17 mod 5 plus 23 mod 7?", "code": "def f(): return 17 % 5 + 23 % 7", "gold_answer": "4", "capability_tags": ["modular_arithmetic"]}
+{"problem": "What is the 10th term of the arithmetic sequence that starts at 3 with a common difference of 5?", "code": "def f(): return 3 + (10-1) * 5", "gold_answer": "48", "capability_tags": ["sequences"]}
+{"problem": "If f(x) = 2x^2 - 3x + 1, what is f(4)?", "code": "def f(): return 2*4**2 - 3*4 + 1", "gold_answer": "21", "capability_tags": ["algebra"]}
+{"problem": "What is the GCD of 84 and 126?", "code": "import math\ndef f(): return math.gcd(84, 126)", "gold_answer": "42", "capability_tags": ["number_theory"]}
+{"problem": "A bag contains 5 red balls and 3 blue balls. If you draw 2 balls without replacement, what is the probability that both are red? Express as a fraction.", "code": "def f(): return 5/8 * 4/7", "gold_answer": "0.35714285714285715", "capability_tags": ["probability"]}
+{"problem": "What is the sum of the first 100 positive integers?", "code": "def f(): return 100 * 101 // 2", "gold_answer": "5050", "capability_tags": ["arithmetic", "sequences"]}
+{"problem": "How many distinct permutations of the letters in 'MISSISSIPPI' are there?", "code": "import math\ndef f(): return math.factorial(11) // (math.factorial(4) * math.factorial(4) * math.factorial(2))", "gold_answer": "34650", "capability_tags": ["combinatorics"]}
+{"problem": "What is 2^10 + 3^5?", "code": "def f(): return 2**10 + 3**5", "gold_answer": "1267", "capability_tags": ["arithmetic"]}
+{"problem": "In a right triangle with legs of length 5 and 12, what is the length of the hypotenuse?", "code": "import math\ndef f(): return math.sqrt(5**2 + 12**2)", "gold_answer": "13.0", "capability_tags": ["geometry"]}
+{"problem": "What is the least common multiple of 12 and 18?", "code": "import math\ndef f(): return math.lcm(12, 18)", "gold_answer": "36", "capability_tags": ["number_theory"]}
+{"problem": "What is the sum of the interior angles of a hexagon in degrees?", "code": "def f(): return (6-2) * 180", "gold_answer": "720", "capability_tags": ["geometry"]}
+{"problem": "If a coin is flipped 8 times, how many possible outcomes are there?", "code": "def f(): return 2**8", "gold_answer": "256", "capability_tags": ["combinatorics"]}
+{"problem": "What is the product of all single-digit prime numbers?", "code": "def f(): return 2*3*5*7", "gold_answer": "210", "capability_tags": ["number_theory"]}
+{"problem": "Solve for x: 3x + 7 = 22. What is x?", "code": "def f(): return (22-7)/3", "gold_answer": "5.0", "capability_tags": ["algebra"]}
+{"problem": "What is the 7th Fibonacci number (F(1)=1, F(2)=1)?", "code": "def f():\n    a, b = 1, 1\n    for _ in range(5): a, b = b, a+b\n    return b", "gold_answer": "13", "capability_tags": ["sequences"]}
+{"problem": "What is the area of a circle with radius 7? Give the exact value as a multiple of pi (just the coefficient).", "code": "def f(): return 7**2", "gold_answer": "49", "capability_tags": ["geometry"]}
+{"problem": "What is 123456789 mod 9?", "code": "def f(): return 123456789 % 9", "gold_answer": "0", "capability_tags": ["modular_arithmetic"]}
