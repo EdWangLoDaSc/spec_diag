@@ -57,8 +57,13 @@ def compute_score(
     score = float(executor.eval_student(ground_truth, solution_str))
 
     # Phase 1: report to RewardTracker (fire-and-forget)
+    # Prefix tags with task_type so memory tracks per-type capability
+    # e.g., ["sorting"] → ["code_o:sorting", "sorting"]
+    raw_tags = ground_truth.get("capability_tags") or []
+    task_type = ground_truth.get("task_type", "code_o")
+    prefixed = [f"{task_type}:{t}" for t in raw_tags]
     _try_report(
-        tags=ground_truth.get("capability_tags") or [],
+        tags=prefixed + raw_tags,  # both prefixed and raw for compatibility
         score=score,
         task=ground_truth,
         response=solution_str,
