@@ -102,6 +102,15 @@ spec_diag:
   # Seconds between buffer checkpoint saves. Default 300s (5 minutes).
   checkpoint_interval_s: 300.0
 
+  # One-shot cold-start seed cache (JSON file path).
+  # - First run with no file at this path: generator.cold_start() runs as
+  #   usual, and the warmed-up buffer is dumped here on success.
+  # - Later runs: if the file exists, tasks are loaded from it and the
+  #   expensive cold_start() round-trip to vLLM is skipped.
+  # Orthogonal to checkpoint_dir (rolling, training-time state).
+  # Set to null to disable. Example: ./cache/cold_start_seed.json
+  cold_start_cache_path: null
+
   feeder:
     # Tasks per generator.cold_start() call. Bigger = fewer vLLM round trips
     # but more latency per trip. Should be a few × data.train_batch_size so

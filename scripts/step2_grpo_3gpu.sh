@@ -6,7 +6,7 @@ set -euo pipefail
 
 SPEC_DIAG_ROOT="${SPEC_DIAG_ROOT:-$(pwd)}"
 CONDA_ENV="${CONDA_ENV:-spec_diag}"
-STUDENT_MODEL="${STUDENT_MODEL:-/home/apulis-dev/models/Qwen25-7B-Instruct/V0/code/Qwen2.5-7B-Instruct}"
+STUDENT_MODEL="${STUDENT_MODEL:-/data/user/dingcao/hanyang/proj1/models/Qwen25-7B-Instruct/V0/code/Qwen2.5-7B-Instruct}"
 OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://127.0.0.1:8000/v1}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-dummy}"
 SPEC_DIAG_MODEL="${SPEC_DIAG_MODEL:-generator}"
@@ -26,7 +26,7 @@ RUN_DIR="$RUN_DIR_BASE/run_${TS}"
 mkdir -p "$RUN_DIR"
 TRAIN_LOG="$RUN_DIR/train.log"
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1,2,3}"
 N_VIS=$(echo "$CUDA_VISIBLE_DEVICES" | awk -F',' '{print NF}')
 if [ "$N_VIS" -ne 3 ]; then
   echo "ERROR: GRPO script needs exactly 3 visible GPUs; got CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" >&2
@@ -101,7 +101,7 @@ python -m spec_diag.train \
   trainer.project_name='spec_diag' \
   trainer.experiment_name="split_1vllm_3grpo_${TS}" \
   trainer.logger='["console","tensorboard"]' \
-  trainer.test_freq=30 \
+  trainer.test_freq=20 \
   '+actor_rollout_ref.model.override_config.attn_implementation=eager' \
   '+critic.model.override_config.attn_implementation=eager' \
   ${TRAIN_OVERRIDES} \

@@ -7,7 +7,7 @@ set -euo pipefail
 
 SPEC_DIAG_ROOT="${SPEC_DIAG_ROOT:-$(pwd)}"
 CONDA_ENV="${CONDA_ENV:-spec_diag}"
-MODEL="${MODEL:-/home/apulis-dev/models/Qwen25-7B-Instruct/V0/code/Qwen2.5-7B-Instruct}"
+MODEL="${MODEL:-/data/user/dingcao/hanyang/proj1/models/Qwen3-8B}"
 SERVED_NAME="${SERVED_NAME:-generator}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-16384}"

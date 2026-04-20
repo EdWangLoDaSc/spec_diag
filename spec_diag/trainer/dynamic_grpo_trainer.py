@@ -613,8 +613,11 @@ class DynamicGRPOTrainer:
     def _warmup_buffer(self, n_tasks: int, run_dir: Path | None = None) -> int:
         """Synchronously fill the buffer with n_tasks cold-start tasks.
 
-        If a checkpoint exists in checkpoint_dir, load it first and skip warmup
-        if the loaded buffer already meets n_tasks.
+        Resolution order (first source that meets n_tasks wins):
+          1. Rolling checkpoint at ``checkpoint_dir/buffer.json`` (mutates during training).
+          2. One-shot cold-start cache at ``cold_start_cache_path`` (frozen seed).
+          3. Fresh ``generator.cold_start()`` — and if a cache path is set, persist
+             the freshly-generated seed to it so later runs skip the LLM call.
         """
         import ray
 
@@ -639,6 +642,25 @@ class DynamicGRPOTrainer:
                         loaded, n_tasks,
                     )
                     return loaded
+
+        # One-shot cold-start cache: reuse a frozen seed across runs to skip
+        # expensive generator.cold_start() calls.
+        cache_path_cfg = self._sd_cfg("cold_start_cache_path", None)
+        cache_path = Path(cache_path_cfg) if cache_path_cfg else None
+        if cache_path is not None and cache_path.exists():
+            logger.info(
+                "spec_diag warmup: found cold-start cache at %s, loading...",
+                cache_path,
+            )
+            loaded = ray.get(
+                self.dynamic_dataset_handle.load.remote(str(cache_path))
+            )
+            logger.info(
+                "spec_diag warmup: loaded %d tasks from cold-start cache",
+                loaded,
+            )
+            if loaded >= n_tasks:
+                return loaded
 
         if self.generator is None or n_tasks <= 0:
             return 0
@@ -677,6 +699,22 @@ class DynamicGRPOTrainer:
                 len(tasks), produced, n_tasks,
             )
         logger.info("spec_diag warmup: buffer now has %d tasks", produced)
+
+        # Persist the freshly-generated seed so next run can skip cold_start.
+        if cache_path is not None and not cache_path.exists() and produced > 0:
+            try:
+                ray.get(
+                    self.dynamic_dataset_handle.save.remote(str(cache_path))
+                )
+                logger.info(
+                    "spec_diag warmup: saved cold-start cache to %s",
+                    cache_path,
+                )
+            except Exception as e:
+                logger.warning(
+                    "spec_diag warmup: failed to save cold-start cache: %s", e,
+                )
+
         return produced
 
     def _start_feeder(self, run_dir: Path | None = None) -> None:
