@@ -100,7 +100,7 @@ TRAIN_CMD="${TRAIN_CMD:-python -m spec_diag.train}"
 
 echo "[run] $TRAIN_CMD"
 set +e
-bash -lc "$TRAIN_CMD" 2>&1 | tee "$TRAIN_LOG"
+bash -c "$TRAIN_CMD" 2>&1 | tee "$TRAIN_LOG"
 RC=${PIPESTATUS[0]}
 set -e
 
